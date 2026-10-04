@@ -6,6 +6,7 @@ import java.nio.charset.CodingErrorAction
 
 /** The Client API uses logical relative paths; encoding belongs only to the URL builder. */
 internal object WorkspaceFileRules {
+    const val MEDIA_LIMIT = 4L * 1024 * 1024 * 1024
     const val TEXT_LIMIT = 2 * 1024 * 1024
     const val PREVIEW_LIMIT = 24L * 1024 * 1024
     private val aliases = Regex("%2e|%2f|%5c|%25|%00", RegexOption.IGNORE_CASE)

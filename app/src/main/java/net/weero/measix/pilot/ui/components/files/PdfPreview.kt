@@ -25,16 +25,23 @@ import kotlinx.coroutines.*
 /** One bounded page at a time. The producing coroutine owns the renderer and file descriptor. */
 @Composable
 internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (Throwable) -> Unit) {
-    var page by remember(file) { mutableIntStateOf(0) }
-    var count by remember(file) { mutableIntStateOf(0) }
-    var bitmap by remember(file) { mutableStateOf<Bitmap?>(null) }
-    DisposableEffect(file) { onDispose { bitmap?.recycle(); bitmap = null } }
-    LaunchedEffect(file, page) {
+    PdfPreview(file, { ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) }, modifier, onFailure)
+}
+
+@Composable
+internal fun PdfPreview(identity: Any, open: suspend () -> ParcelFileDescriptor, modifier: Modifier = Modifier, onFailure: (Throwable) -> Unit) {
+    var jump by remember(identity) { mutableStateOf(false) }
+    var input by remember(identity) { mutableStateOf("") }
+    var page by remember(identity) { mutableIntStateOf(0) }
+    var count by remember(identity) { mutableIntStateOf(0) }
+    var bitmap by remember(identity) { mutableStateOf<Bitmap?>(null) }
+    DisposableEffect(identity) { onDispose { bitmap?.recycle(); bitmap = null } }
+    LaunchedEffect(identity, page) {
         bitmap?.recycle(); bitmap = null
         var rendered: Bitmap? = null
         try {
             val result = withContext(Dispatchers.IO) {
-                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                open().use { descriptor ->
                     PdfRenderer(descriptor).use { renderer ->
                         renderer.openPage(page).use { pdf ->
                             val scale = minOf(2f, 2000f / maxOf(pdf.width, pdf.height))
@@ -55,6 +62,13 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
         catch (error: Exception) { error.printStackTrace(); onFailure(error) }
         finally { rendered?.recycle() }
     }
+    if (jump) AlertDialog(onDismissRequest = { jump = false },
+        title = { Text(stringResource(R.string.file_pdf_go_to_page)) },
+        text = { OutlinedTextField(input, { input = it }, singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) },
+        confirmButton = { TextButton({ page = requireNotNull(input.toIntOrNull()) - 1; jump = false },
+            enabled = input.toIntOrNull()?.let { it in 1..count } == true) { Text(stringResource(R.string.common_confirm)) } },
+        dismissButton = { TextButton({ jump = false }) { Text(stringResource(R.string.common_cancel)) } })
     BoxWithConstraints(modifier) {
         val sideControls = maxWidth >= 600.dp && maxHeight < 480.dp
         val controls = if (count == 0) 0.dp else 48.dp
@@ -62,7 +76,7 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
             end = if (sideControls) controls else 0.dp,
             bottom = if (sideControls) 0.dp else controls,
         )
-        bitmap?.let { key(file, page) {
+        bitmap?.let { key(identity, page) {
             val zoom = rememberZoomableState(Size(it.width.toFloat(), it.height.toFloat()))
             val scope = rememberCoroutineScope()
             DisposableEffect(zoom) { onDispose { zoom.cancel() } }
@@ -80,7 +94,7 @@ internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (T
             IconButton({ page-- }, enabled = page > 0) {
                 Icon(HugeIcons.ArrowLeft01, stringResource(R.string.file_preview_previous_page))
             }
-            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+            TextButton({ input = (page + 1).toString(); jump = true }) {
                 Text("${page + 1} / $count", style = MaterialTheme.typography.labelMedium)
             }
             IconButton({ page++ }, enabled = page + 1 < count) {

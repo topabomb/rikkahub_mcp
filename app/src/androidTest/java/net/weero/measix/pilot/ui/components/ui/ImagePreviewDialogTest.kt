@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -60,6 +61,7 @@ class ImagePreviewDialogTest {
             add(net.weero.measix.pilot.service.ImageSourceInterceptor)
             add(net.weero.measix.pilot.service.ImageSourceKeyer)
             add(net.weero.measix.pilot.service.ImageSourceFetcherFactory)
+            add(coil3.svg.SvgDecoder.Factory(scaleToDensity = false))
         }.build()
         coil3.SingletonImageLoader.setUnsafe(loader)
     }
@@ -256,6 +258,66 @@ class ImagePreviewDialogTest {
             }
     }
 
+    @Test fun validatedSvgRendersThroughTheSharedImageSourceAndDecoder() {
+        val bytes = """<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300">
+            <rect width="900" height="300" fill="red"/></svg>""".toByteArray()
+        val source = net.weero.measix.pilot.service.ImageSource("image-safe-svg",
+            net.weero.measix.pilot.service.ImageOrigin.LOCAL, displayName = "safe.svg",
+            verifyAccess = {}, readPayload = {
+                net.weero.measix.pilot.service.workspace.validateWorkspaceImage(bytes, "safe.svg")
+                bytes
+            }, mimeHint = "image/svg+xml", gallerySaveSupported = false)
+        compose.setContent { MaterialTheme {
+            if (visible) ImagePreviewDialog(listOf(source), { visible = false })
+        } }
+        try {
+            compose.waitUntil(5_000) { imageCoverage(red = true) > 0.1f }
+        } finally { captureEvidence("image-svg-no-viewbox") }
+        compose.onNodeWithText("safe.svg").assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_save_content_description))
+            .assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_close_content_description))
+            .assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { !visible }
+    }
+
+    @Test fun rejectedImageShowsTheReadDiagnosticAndKeepsCloseAvailable() {
+        val source = net.weero.measix.pilot.service.ImageSource("image-invalid",
+            net.weero.measix.pilot.service.ImageOrigin.LOCAL, displayName = "unsafe.svg",
+            verifyAccess = {}, readPayload = { error("workspace_svg_external_resource") })
+        compose.setContent { MaterialTheme {
+            if (visible) ImagePreviewDialog(listOf(source), { visible = false }, showSaveAction = false)
+        } }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasText("workspace_svg_external_resource", substring = true))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_close_content_description))
+            .assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { !visible }
+    }
+
+    @Test
+    fun singleTapTogglesControlsAndExplicitCloseDismisses() {
+        openViewer()
+        compose.waitUntil(5_000) { imageCoverage(red = true) > 0.1f }
+        val close = compose.activity.getString(R.string.image_viewer_close_content_description)
+        compose.onNodeWithContentDescription(close).assertIsDisplayed()
+        compose.onNode(isDialog()).performTouchInput { click(center) }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasContentDescription(close))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        assertTrue(visible)
+        compose.onNode(isDialog()).performTouchInput { click(center) }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasContentDescription(close))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription(close).performClick()
+        compose.waitUntil(5_000) { !visible }
+    }
+
     @Test
     fun doubleTapZoomsAndVerticalPanDoesNotDismiss() {
         openViewer()
@@ -269,6 +331,24 @@ class ImagePreviewDialogTest {
         compose.waitForIdle()
         assertTrue("A zoomed image must pan instead of closing the viewer", visible)
         compose.onNodeWithText("1 / 2").assertExists()
+    }
+
+    private fun captureEvidence(name: String) {
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "preview-evidence")
+        check(directory.isDirectory || directory.mkdirs())
+        val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+        try {
+            File(directory, "$name.png").outputStream().use {
+                check(screenshot.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { screenshot.recycle() }
+        listOf("mkdir -p /data/local/tmp/preview-ui-evidence",
+            "cp ${directory.absolutePath}/$name.png /data/local/tmp/preview-ui-evidence/$name.png").forEach { command ->
+            val output = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+                .bufferedReader().use { it.readText() }
+            check(output.isBlank()) { output }
+        }
     }
 
     private fun imageCoverage(red: Boolean): Float {

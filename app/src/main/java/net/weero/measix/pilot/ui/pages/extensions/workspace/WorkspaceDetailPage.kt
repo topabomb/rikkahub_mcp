@@ -291,7 +291,7 @@ fun WorkspaceDetailPage(id: String) {
                             entry.isDirectory -> vm.open(entry)
 
                             else -> when (fileType(entry.name)) {
-                                FileType.TEXT -> navController.navigate(
+                                FileType.TEXT, FileType.MARKDOWN, FileType.SVG, FileType.PDF, FileType.VIDEO, FileType.AUDIO -> navController.navigate(
                                     Screen.WorkspaceFileEditor(id, state.area.name, entry.path)
                                 )
 

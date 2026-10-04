@@ -32,6 +32,8 @@ class ImageSource internal constructor(
     val modifiedAtMillis: Long? = null,
     private val verifyAccess: suspend () -> Unit,
     private val readPayload: suspend () -> ByteArray,
+    internal val mimeHint: String? = null,
+    internal val gallerySaveSupported: Boolean = true,
 ) {
     internal val cacheKey = "image-source:" + cacheIdentity.encodeUtf8().sha256().hex()
 
@@ -74,7 +76,7 @@ internal object ImageSourceFetcherFactory : Fetcher.Factory<ImageSource> {
         val bytes = data.readBytes()
         SourceFetchResult(
             source = CoilImageSource(bytes.inputStream().source().buffer(), options.fileSystem, ByteBufferMetadata(ByteBuffer.wrap(bytes))),
-            mimeType = ImageMime.sniff(bytes),
+            mimeType = data.mimeHint ?: ImageMime.sniff(bytes),
             dataSource = if (data.origin == ImageOrigin.NETWORK) DataSource.NETWORK else DataSource.DISK,
         )
     }

@@ -24,7 +24,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.service.ImageSource
 import net.weero.measix.pilot.service.ImageOrigin
-import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
 import net.weero.measix.pilot.data.files.FilePayloadTooLargeException
 import kotlinx.coroutines.sync.Mutex
@@ -184,13 +183,15 @@ class WorkspaceApplicationService internal constructor(
         suspend fun requireEntry() {
             requireWorkspace(workspaceId)
             check(!entry.isDirectory) { "workspace_image_unavailable" }
-            if (entry.sizeBytes > GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+            if (entry.sizeBytes > MAX_WORKSPACE_IMAGE_BYTES) throw FilePayloadTooLargeException()
             check(repository.statFile(workspaceId, area, entry.path) == entry) { "workspace_image_changed" }
         }
         return ImageSource(
             cacheIdentity = "workspace:$workspaceId:$area:$entry",
             origin = ImageOrigin.LOCAL,
             displayName = entry.name,
+            gallerySaveSupported = workspaceImageGallerySaveSupported(entry.name),
+            mimeHint = if (entry.name.endsWith(".svg", ignoreCase = true)) "image/svg+xml" else null,
             modifiedAtMillis = entry.updatedAt,
             verifyAccess = { gated(workspaceId) { requireEntry() } },
             readPayload = { gated(workspaceId) {
@@ -199,20 +200,78 @@ class WorkspaceApplicationService internal constructor(
                 val output = object : java.io.ByteArrayOutputStream() {
                     override fun write(value: Int) {
                         reading.ensureActive()
-                        if (size() >= GeneratedMediaStore.MAX_IMAGE_BYTES) throw FilePayloadTooLargeException()
+                        if (size() >= MAX_WORKSPACE_IMAGE_BYTES) throw FilePayloadTooLargeException()
                         super.write(value)
                     }
                     override fun write(bytes: ByteArray, offset: Int, length: Int) {
                         reading.ensureActive()
-                        if (length > GeneratedMediaStore.MAX_IMAGE_BYTES - size()) throw FilePayloadTooLargeException()
+                        if (length > MAX_WORKSPACE_IMAGE_BYTES - size()) throw FilePayloadTooLargeException()
                         super.write(bytes, offset, length)
                     }
                 }
                 repository.exportFile(workspaceId, area, entry.path, output)
                 requireEntry()
-                output.toByteArray().also { check(ImageMime.isAcceptedImage(it)) { "workspace_image_invalid" } }
+                output.toByteArray().also { validateWorkspaceImage(it, entry.name) }
             } },
         )
+    }
+
+    suspend fun openPreview(workspaceId: String, area: WorkspaceStorageArea, path: String): android.os.ParcelFileDescriptor =
+        gated(workspaceId) { requireWorkspace(workspaceId); repository.openPreview(workspaceId, area, path) }
+
+    suspend fun previewDocumentUri(workspaceId: String, path: String, authority: String): Uri = gated(workspaceId) {
+        val workspace = requireWorkspace(workspaceId)
+        repository.openPreview(workspaceId, WorkspaceStorageArea.FILES, path).use { }
+        DocumentsContract.buildDocumentUri(authority, "ws/${workspace.root}/$path")
+    }
+
+    internal suspend fun mediaSource(workspaceId: String, area: WorkspaceStorageArea, path: String): net.weero.measix.pilot.service.files.MediaPreviewSource {
+        val entry = gated(workspaceId) {
+            requireWorkspace(workspaceId)
+            requireNotNull(repository.statFile(workspaceId, area, path)) { "workspace_file_missing" }
+        }
+        suspend fun verify() {
+            gated(workspaceId) {
+                requireWorkspace(workspaceId)
+                check(repository.statFile(workspaceId, area, path) == entry) { "workspace_file_changed" }
+            }
+        }
+        require(entry.sizeBytes in 1..net.weero.measix.pilot.service.files.MAX_MEDIA_BYTES) { "workspace_media_size_limit" }
+        val descriptor = openPreview(workspaceId, area, path)
+        try {
+            verify()
+            return net.weero.measix.pilot.service.files.MediaPreviewSource(entry.name, entry.sizeBytes, repository.listFlow(),
+                ::verify, close = descriptor::close) { position, length ->
+                verify()
+                runInterruptible(Dispatchers.IO) {
+                    val bytes = ByteArray(minOf(length.toLong(), entry.sizeBytes - position).toInt())
+                    var offset = 0
+                    while (offset < bytes.size) {
+                        val count = android.system.Os.pread(descriptor.fileDescriptor, bytes, offset, bytes.size - offset, position + offset)
+                        if (count <= 0) throw java.io.EOFException("workspace_file_truncated")
+                        offset += count
+                    }
+                    bytes
+                }.also { verify() }
+            }
+        } catch (failure: Throwable) { descriptor.close(); throw failure }
+    }
+
+    internal suspend fun previewImageSource(workspaceId: String, area: WorkspaceStorageArea, path: String): ImageSource {
+        val entry = gated(workspaceId) {
+            requireWorkspace(workspaceId)
+            requireNotNull(repository.statFile(workspaceId, area, path)) { "workspace_image_missing" }
+        }
+        return imageSource(workspaceId, area, entry)
+    }
+
+    internal suspend fun relativeImageSource(workspaceId: String, area: WorkspaceStorageArea, document: String, reference: String): ImageSource {
+        val path = net.weero.measix.pilot.data.enterprise.WorkspaceFileRules.relativeImage(document, reference)
+        val entry = gated(workspaceId) {
+            requireWorkspace(workspaceId)
+            requireNotNull(repository.statFile(workspaceId, area, path)) { "workspace_image_missing" }
+        }
+        return imageSource(workspaceId, area, entry)
     }
 
     suspend fun writeText(workspaceId: String, path: String, text: String) =

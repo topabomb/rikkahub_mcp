@@ -76,7 +76,7 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies, SingletonI
             } else {
                 add(GifDecoder.Factory())
             }
-            add(SvgDecoder.Factory(scaleToDensity = true))
+            add(SvgDecoder.Factory(scaleToDensity = false))
         }
         .build()
 

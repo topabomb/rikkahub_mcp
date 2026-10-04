@@ -2098,4 +2098,17 @@
   <string name="enterprise_configuration_auth_managed">Организация</string>
   <string name="enterprise_configuration_auth_none">Авторизация не требуется</string>
   <string name="chat_deleted_maintenance_failed">Чат удалён, но запись последнего чата обновить не удалось. Можно начать новый чат.</string>
+  <string name="file_find">Поиск</string>
+  <string name="file_find_previous">Предыдущее</string>
+  <string name="file_find_next">Следующее</string>
+  <string name="file_find_no_match">Совпадений нет</string>
+  <string name="file_go_to_line">Перейти к строке</string>
+  <string name="file_line_number">Номер строки</string>
+  <string name="file_line_invalid">Введите существующий номер строки</string>
+  <string name="file_pdf_go_to_page">Перейти к странице</string>
+  <string name="file_media_rotate">Повернуть</string>
+  <string name="file_preview_rendered">Просмотр</string>
+  <string name="file_preview_source">Исходный текст</string>
+  <string name="image_viewer_close_content_description">Закрыть просмотр изображения</string>
+  <string name="image_viewer_load_failed">Не удалось открыть изображение</string>
 </resources>

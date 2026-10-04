@@ -2098,4 +2098,17 @@
   <string name="enterprise_configuration_auth_managed">企業</string>
   <string name="enterprise_configuration_auth_none">認証不要</string>
   <string name="chat_deleted_maintenance_failed">チャットは削除されましたが、最近のチャット記録を更新できませんでした。新しいチャットを開始できます。</string>
+  <string name="file_find">検索</string>
+  <string name="file_find_previous">前へ</string>
+  <string name="file_find_next">次へ</string>
+  <string name="file_find_no_match">一致するテキストがありません</string>
+  <string name="file_go_to_line">行に移動</string>
+  <string name="file_line_number">行番号</string>
+  <string name="file_line_invalid">有効な行番号を入力してください</string>
+  <string name="file_pdf_go_to_page">ページに移動</string>
+  <string name="file_media_rotate">回転</string>
+  <string name="file_preview_rendered">プレビュー</string>
+  <string name="file_preview_source">ソース</string>
+  <string name="image_viewer_close_content_description">画像プレビューを閉じる</string>
+  <string name="image_viewer_load_failed">画像をプレビューできません</string>
 </resources>

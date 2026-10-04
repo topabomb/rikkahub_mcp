@@ -31,8 +31,8 @@ Assistant.workspaceId 有效
 | `RootfsCompatibility` | 实际 PRoot ELF 架构、对应默认镜像及 guest executable/解释器兼容校验；不拥有安装状态或进程 |
 | `RootfsPatcher` | 修补 DNS、hosts、hostname、locale、group 与临时目录 |
 | `WorkspaceRepository` | Room 实体、协程调度、安装状态和 Manager 调用；不作为 Workspace UI API |
-| `WorkspaceApplicationService` | Workspace typed command 的唯一 owner；UI、模型 Rootfs 操作、安装/删除与终端 mutation 共用互斥协议 |
-| `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表、文本预览和 `observeTerminal` 读口；所有 UI Workspace 读取都走此 port |
+| `WorkspaceApplicationService` | Workspace typed command 的唯一 owner；UI、模型 Rootfs 操作、安装/删除与终端 mutation 共用互斥协议，并提供受授权约束的图片、PDF 描述符和媒体读取能力 |
+| `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表、文本预览和 `observeTerminal` 读口；UI 不直接访问 Repository 或 Manager |
 | `WorkspaceTerminalRuntime` | application-scoped PTY、创建 Job、Tab/选中项和 shell-exit 生命周期唯一 owner |
 | `WorkspaceTools` | 注册 `workspace_*` schema、审批与结果形状；执行只使用受限 `WorkspaceToolSession` capability |
 | `WorkspaceTerminalSession` | 通过 Termux PTY 提供用户交互终端 |
@@ -276,7 +276,7 @@ Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。
 新请求先登记原会话任务；遇到同身份刷新时在锁外等待，完成后重新校验原 handle 再准入。
 因此 SAF 返回与前台状态刷新可以并发，等待期间撤权仍会取消任务并清理本次创建的文档。
 
-GET 只接纳完整 200；列表响应有界，文件内容按 64 KiB 块传输，不建立内存大文件缓存。
+普通文件下载 GET 只接纳完整 200；列表响应有界，文件内容按 64 KiB 块传输，不建立内存大文件缓存。
 重定向和认证器重发关闭。GET 沿 `readClient` 的 OkHttp 只读恢复策略，在响应头接收前恢复可恢复连接失败，
 也可能对 408 或 `Retry-After: 0` 的 503 再次请求；正文读取中断不重放下载。
 文件接口的 `401 invalid_credential` 只说明本次 access token 被拒绝。`PlatformEnterpriseService` 在原 Session
@@ -286,6 +286,8 @@ GET 只接纳完整 200；列表响应有界，文件内容按 64 KiB 块传输�
 写入已收到确定拒绝后，取消后续凭据恢复不把该结果改为 UNKNOWN；未得到确定结果的发送后取消仍保留待核实目标。
 写请求关闭连接自动重试且 body 为 one-shot。新文件用 If-None-Match，已有普通文件
 必须有强 ETag，覆盖目标也必须使用用户确认的目标版本。目录递归删除必须显式确认。
+Core 条件失败为 412 `file_version_conflict`、锁定为 423 `file_locked`、普通冲突为 409；旧部署的同 code 409 仍保留真实诊断。
+这些拒绝不清除草稿、不重放写入；媒体 416 同样终止当前版本读取，不退化成整文件下载。
 UNKNOWN 与异常成功状态、发送后 IO 中断均不能当作失败后可重试；同身份、连接和空间的目标在当前进程内
 保留待核实记录，读取目标并由用户确认后才解除。关闭页面不会清除此记录，进程重启不自动恢复或重放任务。
 
@@ -302,7 +304,9 @@ Nav3 的 `clazzContentKey`，窗口或 Activity 重建复用原 VM、FileEditorS
 恢复后的刷新仍使用 VM 捕获的原 selection。关闭或撤权清除；替换 Session 不复活旧授权，UNKNOWN 写入不重放。
 进程死亡没有原 VM，导航 key 不恢复临时 selection，文件页要求显式返回重开；不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有名和安全短扩展名，
 FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实副本类型与接收应用看到的类型不一致。
-图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 可作为文本源码预览和编辑，外部打开仍是显式动作。
+图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML 只作源码，SVG 支持源码及静态渲染，外部打开仍是显式动作。
+`validateWorkspaceImage` 独立于模型附件准入：位图限制 24 MiB / 1600 万像素，SVG 限制 2 MiB、节点及深度，
+拒绝脚本、DTD/实体、外部资源和递归引用；不支持的 SVG 保留源码入口。
 `RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 渲染预览及外部图片，
 相对图片仍经原 handle 授权读取；不会向富文本渲染器暴露 Bearer URL。
 `WorkspaceFileRules.relativeImage` 只在 Markdown URL 边界严格解码一次百分编码，支持编码的空格和中文，
@@ -319,6 +323,22 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 预览与编辑使用共享文件正文组件和文本类型识别，布局、代码高亮与动作可达性见 [UI 架构](ui-architecture.md)。
 远程仍沿 `WorkspaceText` 的 BOM/换行与 ETag 协议。
 不支持格式时显示元信息、下载和外部打开；读取失败显示原诊断与刷新，不能冒充格式不支持。图片信息沿原 `ImageSource` 授权，失败可重试；PDF 逐页缩放/平移，翻页释放旧 bitmap 并重建缩放状态，首尾禁用对应动作。加载失败回收本次副本，刷新复验原状态与句柄；缩放不提高渲染分辨率或资源上限。
+
+### 大文件音视频
+
+本地与远程 `mediaSource` 均限制单文件不超过 4 GiB，长度、位置和边界使用 Long。
+本地通过 `WorkspaceDirectoryHandle` 的 NOFOLLOW/regular-file 校验取得单个描述符，整个播放期持有同一文件，
+使用 `pread` 按位置读取；每次读前后复验原工作区与文件属性。页面取消关闭描述符，不复制整份视频到缓存。
+
+远程先以 HEAD 取得实际长度与强 ETag，后续每段 GET 使用同一 ETag 的 If-Match 与有界 Range。
+客户端严格验证 206、Content-Range、响应 ETag、精确字节数和 identity 编码；不接受服务器以 200 全文件响应代替范围，
+也不在 seek 后接纳新版本。401 只按原会话的现有协议恢复 token 后重试一次，范围与版本不变。
+服务端不具备这些条件时显示诊断，用户仍可显式下载或外部打开，不偷偷缓存完整大文件。
+
+`MediaPreviewDataSource` 首段最多 256 KiB，其余读窗口最多 8 MiB；播放器目标缓冲 24 MiB，
+这是缓冲目标而非进程总内存上限。每次读取缓存也复验访问权；暂停保留有界缓冲以支持拖动后的画面更新；离页和后台停止播放器读取，
+撤权停止并清空当前媒体。关闭与重开使用独立读取会话，已取消的迟到结果不能进入新会话。
+本地属性与远程 ETag 复验不替代文件系统快照；解码格式仍取决于设备支持的容器与编解码器。
 
 ## 11. 维护与验证
 

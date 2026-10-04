@@ -279,6 +279,18 @@ internal class RemoteWorkspaceService(
             it.size, it.modifiedAt, it.etag) }, result.usedBytes, result.availableBytes)
     }
 
+    suspend fun mediaSource(handle: RemoteWorkspaceHandle, file: RemoteFile): net.weero.measix.pilot.service.files.MediaPreviewSource {
+        val metadata = operation(handle, retryRejectedToken = true) { token ->
+            client.mediaMetadata(handle.connection, token, handle.space, file.path)
+        }
+        return net.weero.measix.pilot.service.files.MediaPreviewSource(file.name, metadata.length, summary,
+            verifyAccess = { validate(handle) },
+            readRange = { position, length -> operation(handle, retryRejectedToken = true) { token ->
+                client.mediaRange(handle.connection, token, handle.space, file.path, metadata, position, length)
+            } },
+        )
+    }
+
     suspend fun readText(handle: RemoteWorkspaceHandle, file: RemoteFile): RemoteTextDocument = operation(handle, retryRejectedToken = true) { token ->
         val buffer = ByteArrayOutputStream()
         val metadata = client.download(handle.connection, token, handle.space, file.path, buffer, WorkspaceFileRules.TEXT_LIMIT.toLong())
@@ -464,10 +476,12 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    fun imageSource(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = WorkspaceFileRules.PREVIEW_LIMIT) =
+    fun imageSource(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_IMAGE_BYTES.toLong()) =
         net.weero.measix.pilot.service.ImageSource(
             cacheIdentity = "remote:${handle.id}:${file.path}:${file.etag ?: Uuid.random()}",
             origin = net.weero.measix.pilot.service.ImageOrigin.NETWORK, displayName = file.name,
+            gallerySaveSupported = net.weero.measix.pilot.service.workspace.workspaceImageGallerySaveSupported(file.name),
+            mimeHint = if (file.name.endsWith(".svg", ignoreCase = true)) "image/svg+xml" else null,
             modifiedAtMillis = file.modifiedAt?.let { value ->
                 try { java.time.Instant.parse(value).toEpochMilli() } catch (_: java.time.DateTimeException) { null }
             },
@@ -477,11 +491,7 @@ internal class RemoteWorkspaceService(
                     val buffer = ByteArrayOutputStream()
                     client.download(handle.connection, token, handle.space, file.path, buffer, maxBytes)
                     buffer.toByteArray().also { bytes ->
-                        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                        require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 16_000_000) {
-                            "workspace_image_pixel_limit"
-                        }
+                        net.weero.measix.pilot.service.workspace.validateWorkspaceImage(bytes, file.name)
                     }
                 }
             },

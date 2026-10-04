@@ -50,6 +50,90 @@ class RemoteWorkspaceServiceTest {
         return Fixture(sessions, service, client, selection, control, invalidations)
     }
 
+    @Test fun `media source pins HEAD version and length instead of directory metadata`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val metadata = WorkspaceContentMetadata("\"head-version\"", 4294967296L, "video/mp4")
+        coEvery { f.client.mediaMetadata(any(), any(), any(), any()) } returns metadata
+        coEvery { f.client.mediaRange(any(), any(), any(), any(), any(), any(), any()) } returns byteArrayOf(42)
+        val source = f.service.mediaSource(handle, file.copy(path = "movie.mp4", size = 1, etag = "\"old-list-version\""))
+        assertEquals(metadata.length, source.length)
+        assertArrayEquals(byteArrayOf(42), source.readRange(metadata.length - 1, 1))
+        coVerify(exactly = 1) { f.client.mediaMetadata(handle.connection, any(), handle.space, "movie.mp4") }
+        coVerify(exactly = 1) {
+            f.client.mediaRange(handle.connection, any(), handle.space, "movie.mp4", metadata, metadata.length - 1, 1)
+        }
+        f.service.close(handle)
+    }
+
+    @Test fun `media range token recovery retains original file metadata and position`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val metadata = WorkspaceContentMetadata("\"original\"", 4294967296L, "video/mp4")
+        coEvery { f.client.mediaMetadata(any(), any(), any(), any()) } returns metadata
+        coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
+        val identities = mutableListOf<WorkspaceContentMetadata>()
+        val positions = mutableListOf<Long>()
+        coEvery { f.client.mediaRange(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            identities += arg<WorkspaceContentMetadata>(4)
+            positions += arg<Long>(5)
+            if (arg<String>(1) != "replacement-access") throw accessRejected()
+            byteArrayOf(7)
+        }
+        val source = f.service.mediaSource(handle, file)
+        assertArrayEquals(byteArrayOf(7), source.readRange(2147483649L, 1))
+        assertEquals(listOf(metadata, metadata), identities)
+        assertEquals(listOf(2147483649L, 2147483649L), positions)
+        coVerify(exactly = 1) { f.client.mediaMetadata(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
+        assertTrue(f.invalidations.isEmpty())
+        f.service.close(handle)
+    }
+
+    @Test fun `revocation cancels media range and waits for its resource cleanup`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        coEvery { f.client.mediaMetadata(any(), any(), any(), any()) } returns WorkspaceContentMetadata("\"v1\"", 8, null)
+        val entered = CompletableDeferred<Unit>()
+        val cleaning = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var cleaned = false
+        coEvery { f.client.mediaRange(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            entered.complete(Unit)
+            try { awaitCancellation() }
+            finally {
+                withContext(NonCancellable) {
+                    cleaning.complete(Unit)
+                    release.await()
+                    cleaned = true
+                }
+            }
+        }
+        val source = f.service.mediaSource(handle, file)
+        val reading = async { runCatching { source.readRange(0, 8) } }
+        entered.await()
+        val receipt = f.service.revoke(f.selection.access)
+        val closing = async { receipt.awaitClosed() }
+        try {
+            cleaning.await(); runCurrent()
+            assertFalse(closing.isCompleted)
+            assertFalse(cleaned)
+        } finally { release.complete(Unit) }
+        closing.await()
+        assertTrue(cleaned)
+        assertTrue(reading.await().exceptionOrNull() is CancellationException)
+    }
+
+    @Test fun `revoked media source denies buffered access checks and all later requests`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        coEvery { f.client.mediaMetadata(any(), any(), any(), any()) } returns WorkspaceContentMetadata("\"v1\"", 8, null)
+        coEvery { f.client.mediaRange(any(), any(), any(), any(), any(), any(), any()) } returns ByteArray(8)
+        val source = f.service.mediaSource(handle, file)
+        source.readRange(0, 8)
+        f.service.revoke(f.selection.access).awaitClosed()
+        assertTrue(runCatching { source.verifyAccess() }.isFailure)
+        assertTrue(runCatching { source.readRange(0, 8) }.isFailure)
+        coVerify(exactly = 1) { f.client.mediaMetadata(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { f.client.mediaRange(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
     @Test fun `unknown failure stays outside resource cards and a later successful query discovers provisioned files`() = runTest {
         val f = fixture(initialError = IOException("state endpoint unavailable"))
         assertNull(f.service.summary.value)

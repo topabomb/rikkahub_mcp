@@ -55,23 +55,19 @@ private val textLanguages: Map<String, String?> = buildMap {
         "svelte", "gql", "graphql", "proto", "srt", "vtt", "bat", "cmd").forEach { put(it, null) }
 }
 
-/**
- * 工作区文件的粗略分类, 用于决定点击文件时的行为:
- * - TEXT: 应用内文本编辑/预览
- * - IMAGE: 应用内可缩放图片预览
- * - OTHER: 交给系统应用 (视频/音频/文档等) 打开
- */
-internal enum class FileType { TEXT, IMAGE, OTHER }
-
-private val IMAGE_EXTENSIONS = setOf(
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif", "ico",
-)
+/** Candidates only; the owning service validates bytes and access before display. */
+internal enum class FileType { TEXT, MARKDOWN, SVG, IMAGE, PDF, VIDEO, AUDIO, OTHER }
 
 internal fun fileType(name: String): FileType {
     val ext = name.substringAfterLast('.', "").lowercase()
     return when {
+        ext in setOf("md", "markdown", "mdown", "mkd") -> FileType.MARKDOWN
+        ext == "svg" -> FileType.SVG
+        ext == "pdf" -> FileType.PDF
+        ext in setOf("mp4", "m4v", "mov", "webm", "mkv", "3gp") -> FileType.VIDEO
+        ext in setOf("mp3", "m4a", "aac", "wav", "ogg", "opus", "flac", "amr") -> FileType.AUDIO
         fileTextFormat(name) != null -> FileType.TEXT
-        ext in IMAGE_EXTENSIONS -> FileType.IMAGE
+        ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif", "ico") -> FileType.IMAGE
         else -> FileType.OTHER
     }
 }

@@ -25,7 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -67,6 +67,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class EditorDraftAndroidTest {
+    // Real repository IO must resume through queued composition work, not the legacy unconfined dispatcher.
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun workspaceDraftDoesNotEnterActivityBundle() {
@@ -83,7 +84,7 @@ class EditorDraftAndroidTest {
         compose.waitUntil(5_000) { reads == 1 }
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertDoesNotExist()
         loaded.complete(WorkspaceTextPreviewResult.Success(published))
-        waitForWorkspaceEditor { reads == 1 }
+        enterWorkspaceEditing { reads == 1 }
         replaceEditorBody(published + "unsaved")
         assertSmallActivityBundle()
     }
@@ -130,10 +131,10 @@ class EditorDraftAndroidTest {
         }
         val restoration = StateRestorationTester(compose)
         restoration.setContent { host { WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries) } }
-        waitForWorkspaceEditor { reads == 1 }
+        enterWorkspaceEditing { reads == 1 }
         replaceEditorBody("unsaved")
         restoration.emulateSavedInstanceStateRestore()
-        waitForWorkspaceEditor { reads == 2 }
+        enterWorkspaceEditing { reads == 2 }
         assertEditorBody("published")
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertIsEnabled()
     }
@@ -180,7 +181,7 @@ class EditorDraftAndroidTest {
             compose.setContent { host {
                 WorkspaceFileEditorPage(workspaceId, WorkspaceStorageArea.FILES, "recreate.txt", commands, queries)
             } }
-            waitForWorkspaceEditor()
+            enterWorkspaceEditing()
             assertEditorBody("published before editing")
             // More than one MiB as UTF-16, with a bounded paragraph count for the lifecycle fixture.
             val draft = largeBundleBody(paragraphCount = 400) + "unsaved"
@@ -206,7 +207,7 @@ class EditorDraftAndroidTest {
                     WorkspaceFileEditorPage(workspaceId, WorkspaceStorageArea.FILES, "recreate.txt", commands, queries)
                 } }
             }
-            waitForWorkspaceEditor()
+            enterWorkspaceEditing()
             assertEditorBody("latest published owner content")
             compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertIsEnabled()
         } catch (error: Throwable) {
@@ -254,7 +255,7 @@ class EditorDraftAndroidTest {
             compose.setContent { host {
                 WorkspaceFileEditorPage(workspaceId, WorkspaceStorageArea.FILES, path, commands, queries)
             } }
-            waitForWorkspaceEditor()
+            enterWorkspaceEditing()
             assertEditorBody(published)
             replaceEditorBody(draft)
             val actualIoFailure = runBlocking { withTimeout(10_000) {
@@ -332,7 +333,7 @@ class EditorDraftAndroidTest {
             if (backStack.last() == editorPage) WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries)
             else androidx.compose.material3.Text("Returned to files")
         } }
-        waitForWorkspaceEditor()
+        enterWorkspaceEditing()
         replaceEditorBody("unsaved native draft")
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_unsaved)).assertIsDisplayed()
@@ -368,7 +369,7 @@ class EditorDraftAndroidTest {
             if (backStack.last() == editorPage) WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, "text.txt", commands, queries)
             else androidx.compose.material3.Text("Returned to files")
         } }
-        waitForWorkspaceEditor()
+        enterWorkspaceEditing()
         replaceEditorBody("draft to commit")
         val save = compose.activity.getString(R.string.common_save)
         compose.onNodeWithContentDescription(save).performClick()
@@ -425,7 +426,7 @@ class EditorDraftAndroidTest {
         compose.setContent { host {
             if (visible.value) WorkspaceFileEditorPage("id", WorkspaceStorageArea.FILES, path.value, commands, queries)
         } }
-        waitForWorkspaceEditor()
+        enterWorkspaceEditing()
         replaceEditorBody("old draft")
         val save = compose.activity.getString(R.string.common_save)
         compose.onNodeWithContentDescription(save).performClick()
@@ -443,7 +444,7 @@ class EditorDraftAndroidTest {
         }
         // A late completion signal must not revive the cancelled old-target save.
         releaseOldWrite.complete(Unit)
-        waitForWorkspaceEditor()
+        enterWorkspaceEditing()
         assertEditorBody("published new.txt")
         compose.onNodeWithContentDescription(save).assertIsEnabled()
         assertTrue(committed.isEmpty())
@@ -457,7 +458,17 @@ class EditorDraftAndroidTest {
         coVerify(exactly = 0) { commands.writeText("id", "new.txt", "old draft") }
     }
 
-    private fun visibleLabels(): String = compose.onAllNodes(
+    private fun nativeEditorDiagnostic(): String {
+        val states = mutableListOf<String>()
+        fun collect(view: View) {
+            if (view is EditText) states += "shown=${view.isShown}, length=${view.length()}, readOnly=${view.keyListener == null}"
+            if (view is ViewGroup) repeat(view.childCount) { collect(view.getChildAt(it)) }
+        }
+        compose.activityRule.scenario.onActivity { collect(it.window.decorView) }
+        return "autoAdvance=${compose.mainClock.autoAdvance}; nativeEditors=$states"
+    }
+
+    private fun visibleLabels(): String = nativeEditorDiagnostic() + "\n" + compose.onAllNodes(
         SemanticsMatcher.keyIsDefined(SemanticsProperties.Text), useUnmergedTree = true,
     ).fetchSemanticsNodes().joinToString(prefix = "Visible labels: ") { node ->
         node.config[SemanticsProperties.Text].joinToString { it.text.take(100) }
@@ -481,15 +492,31 @@ class EditorDraftAndroidTest {
         }
     }
 
-    private fun waitForWorkspaceEditor(additionalCondition: () -> Boolean = { true }) {
+    private fun enterWorkspaceEditing(additionalCondition: () -> Boolean = { true }) {
         compose.waitUntil(15_000) {
             var editorPresent = false
             compose.activityRule.scenario.onActivity { activity ->
                 editorPresent = containsVisibleEditor(activity.window.decorView)
             }
-            editorPresent && additionalCondition() && compose.onAllNodesWithContentDescription(
-                compose.activity.getString(R.string.common_save),
+            editorPresent && additionalCondition() && compose.onAllNodesWithText(
+                compose.activity.getString(R.string.edit),
             ).fetchSemanticsNodes().isNotEmpty()
+        }
+        // Initial open, restoration and a new path all begin in preview. Enter editing through
+        // the user action before exercising the original draft/save/cancellation contracts.
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertDoesNotExist()
+        onView(isAssignableFrom(EditText::class.java)).check { view, missing ->
+            if (missing != null) throw missing
+            assertNull("Workspace preview must initially be read-only", (view as EditText).keyListener)
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithContentDescription(compose.activity.getString(R.string.common_save))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        onView(isAssignableFrom(EditText::class.java)).check { view, missing ->
+            if (missing != null) throw missing
+            assertNotNull("Edit action must enable the existing native body", (view as EditText).keyListener)
         }
     }
 

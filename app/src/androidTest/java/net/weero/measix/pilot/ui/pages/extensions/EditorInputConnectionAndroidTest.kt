@@ -1,5 +1,10 @@
 package net.weero.measix.pilot.ui.pages.extensions
 
+import android.os.SystemClock
+import android.view.MotionEvent
+import net.weero.measix.pilot.ui.components.files.FileEditText
+import net.weero.measix.pilot.ui.components.files.findFileText
+import net.weero.measix.pilot.ui.components.files.fileLineOffset
 import android.os.Parcel
 import android.os.Build
 import android.graphics.RectF
@@ -54,6 +59,78 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class EditorInputConnectionAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun readingFlingContinuesAfterReleaseAndStopsOnNewTouchWithoutEditing() {
+        val body = (1..1000).joinToString("\n") { "line $it: source text" }
+        val state = FileEditorState(body)
+        compose.setContent {
+            MaterialTheme { FileTextEditor(state, Modifier.fillMaxSize(), readOnly = true, fillViewport = true) }
+        }
+        val editor = nativeEditor()
+        var releasedY = 0
+        compose.runOnIdle {
+            val now = SystemClock.uptimeMillis()
+            val startY = editor.height * .8f
+            fun dispatch(action: Int, time: Long, y: Float) {
+                val event = MotionEvent.obtain(now - 80, time, action, editor.width / 2f, y, 0)
+                try { editor.dispatchTouchEvent(event) } finally { event.recycle() }
+            }
+            dispatch(MotionEvent.ACTION_DOWN, now - 80, startY)
+            dispatch(MotionEvent.ACTION_MOVE, now - 50, startY - 80)
+            dispatch(MotionEvent.ACTION_MOVE, now - 20, startY - 240)
+            dispatch(MotionEvent.ACTION_UP, now, startY - 280)
+            releasedY = editor.scrollY
+        }
+        compose.waitUntil(3_000) {
+            var moved = false
+            compose.runOnUiThread { moved = editor.scrollY > releasedY + 10 }
+            moved
+        }
+        var stoppedY = 0
+        compose.runOnUiThread {
+            val now = SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 40f, 40f, 0)
+            try { editor.dispatchTouchEvent(down) } finally { down.recycle() }
+            stoppedY = editor.scrollY
+        }
+        val observed = java.util.concurrent.CountDownLatch(1)
+        compose.runOnUiThread { editor.postDelayed({ observed.countDown() }, 120) }
+        assertTrue(observed.await(3, java.util.concurrent.TimeUnit.SECONDS))
+        compose.runOnIdle {
+            assertEquals(stoppedY, editor.scrollY)
+            val now = SystemClock.uptimeMillis()
+            val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 40f, 40f, 0)
+            try { editor.dispatchTouchEvent(cancel) } finally { cancel.recycle() }
+            assertSame(state.editable, editor.text)
+            assertEquals(body, state.snapshot())
+            assertEquals(0, state.revision)
+            assertNull(editor.onCreateInputConnection(EditorInfo()))
+        }
+    }
+
+    @Test fun navigationUsesLogicalLinesAndSharedDraftWithoutCreatingEdits() {
+        val state = FileEditorState("Alpha\r\nwrapped source\nalpha\n")
+        compose.setContent {
+            MaterialTheme { FileTextEditor(state, Modifier.fillMaxSize(), readOnly = true, fillViewport = true) }
+        }
+        val editor = nativeEditor() as FileEditText
+        compose.runOnIdle {
+            assertEquals(7, fileLineOffset(state.editable, 2))
+            assertEquals(state.editable.length, fileLineOffset(state.editable, 4))
+            assertEquals(-1, fileLineOffset(state.editable, 5))
+            assertEquals(-1, fileLineOffset(state.editable, 0))
+            val last = findFileText(state.editable, "ALPHA", -1, false)
+            assertTrue(last > 7)
+            editor.revealRange(last, last + 5)
+            assertEquals("alpha", editor.text.subSequence(editor.selectionStart, editor.selectionEnd).toString())
+            assertEquals(0, findFileText(state.editable, "alpha", editor.selectionEnd, true))
+            assertEquals(0, state.revision)
+            assertSame(state.editable, editor.text)
+            state.replaceText("replacement")
+            assertEquals(-1, findFileText(state.editable, "alpha", 0, true))
+            assertEquals(-1, fileLineOffset(state.editable, 2))
+        }
+    }
 
     @Test fun viewportDrawsLongDocumentBelowItsMidpointAndScrollsInBothModes() {
         val body = (1..200).joinToString("\n") { "line $it: full source text" }

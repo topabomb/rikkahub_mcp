@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +40,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -51,6 +53,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
 import com.dokar.sonner.ToastType
 import com.dokar.sonner.Toaster
@@ -141,6 +145,7 @@ fun ImagePreviewDialog(
     deleteAction: ImagePreviewDeleteAction? = null,
     overlay: (@Composable () -> Unit)? = null,
     onInfoRetry: suspend () -> Unit = {},
+    showSaveAction: Boolean = true,
 ) {
     if (images.isEmpty()) {
         LaunchedEffect(Unit) { onDismissRequest() }
@@ -169,8 +174,9 @@ fun ImagePreviewDialog(
     var actionFailure by remember { mutableStateOf<Throwable?>(null) }
     val viewerImages = remember { mutableStateListOf<ImageSource>().apply { addAll(images) } }
     var locallyDeleted by remember { mutableStateOf(emptySet<ImageSource>()) }
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
     val pagerGestureScope = remember {
-        PagerGestureScope(onTap = { dismissState.value() })
+        PagerGestureScope(onTap = { controlsVisible = !controlsVisible })
     }
     val pageCount = viewerImages.size
     val startIndex = initialIndex.coerceIn(0, pageCount - 1)
@@ -196,6 +202,8 @@ fun ImagePreviewDialog(
         }
     }
     val currentUrl = viewerImages.getOrNull(state.currentPage)
+    var previewLoading by remember(currentUrl) { mutableStateOf(true) }
+    var previewFailure by remember(currentUrl) { mutableStateOf<Throwable?>(null) }
     var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
     var imageInfoError by remember(currentUrl) { mutableStateOf<String?>(null) }
     var infoRevision by remember(currentUrl) { mutableStateOf(0) }
@@ -267,9 +275,31 @@ fun ImagePreviewDialog(
                         detectGesture = pagerGestureScope,
                         imageLoader = { index ->
                             val painter = rememberAsyncImagePainter(viewerImages.getOrNull(index))
+                            val painterState by painter.state.collectAsState()
+                            LaunchedEffect(painterState, state.currentPage) {
+                                if (index == state.currentPage) {
+                                    previewLoading = painterState is AsyncImagePainter.State.Empty || painterState is AsyncImagePainter.State.Loading
+                                    previewFailure = (painterState as? AsyncImagePainter.State.Error)?.result?.throwable
+                                    previewFailure?.let { logDiagnosticFailure("ImagePreview", "Image preview load failed", it) }
+                                }
+                            }
                             return@ImagePager Pair(painter, painter.intrinsicSize)
                         },
                     )
+                }
+
+                if (previewLoading) {
+                    CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+                }
+                previewFailure?.let { failure ->
+                    Column(Modifier.align(Alignment.Center).padding(horizontal = 24.dp, vertical = 80.dp)
+                        .heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                        Text(stringResource(R.string.image_viewer_load_failed), color = Color.White)
+                        SelectionContainer {
+                            Text(failure.userVisibleDiagnostic(), color = Color.White,
+                                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                        }
+                    }
                 }
 
                 // 叠加层统一放在全屏 Box 中, 以容器高度(而非 Text/Row 自身高度)换算淡出进度
@@ -281,24 +311,40 @@ fun ImagePreviewDialog(
                             alpha = overlayAlpha(dragOffsetY.floatValue, size.height)
                         }
                 ) {
-                    if (pageCount > 1) {
-                        Text(
+                    if ((controlsVisible || previewFailure != null) && !infoVisible) {
+                        IconButton(
+                            onClick = { dismissState.value() },
+                            modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                                .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+                        ) {
+                            Icon(HugeIcons.Cancel01, stringResource(R.string.image_viewer_close_content_description),
+                                tint = Color.White)
+                        }
+                    }
+                    if ((controlsVisible || previewFailure != null) && !infoVisible) Column(
+                        modifier = Modifier.align(Alignment.TopCenter)
+                            .padding(horizontal = 64.dp, vertical = 12.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        currentUrl?.displayName?.let { name ->
+                            Text(name, color = Color.White, style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        if (pageCount > 1) Text(
                             text = "${state.currentPage + 1} / $pageCount",
                             style = MaterialTheme.typography.labelMedium,
                             color = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 12.dp)
-                                .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
                         )
                     }
 
-                    if (!infoVisible) Row(
+                    if ((controlsVisible || previewFailure != null) && !infoVisible) Row(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .padding(8.dp)
                             .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                            .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
@@ -312,7 +358,7 @@ fun ImagePreviewDialog(
                                 tint = Color.White
                             )
                         }
-                        IconButton(
+                        if (showSaveAction && currentUrl?.gallerySaveSupported == true) IconButton(
                             enabled = !saving,
                             onClick = {
                                 val imageUrl = viewerImages.getOrNull(state.currentPage) ?: return@IconButton
@@ -726,6 +772,9 @@ internal suspend fun resolveImageInfo(image: ImageSource): ImageInfo {
     val bytes = image.readBytes()
     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    val svgInfo = if (image.displayName?.endsWith(".svg", ignoreCase = true) == true) {
+        net.weero.measix.pilot.service.workspace.validateWorkspaceSvg(bytes)
+    } else null
     image.requireAccess()
     return ImageInfo(
         source = when (image.origin) {
@@ -736,10 +785,10 @@ internal suspend fun resolveImageInfo(image: ImageSource): ImageInfo {
             ImageOrigin.LOCAL -> ImageInfoSource.Local
         },
         fileName = image.displayName,
-        width = options.outWidth.takeIf { it > 0 },
-        height = options.outHeight.takeIf { it > 0 },
+        width = svgInfo?.width ?: options.outWidth.takeIf { it > 0 },
+        height = svgInfo?.height ?: options.outHeight.takeIf { it > 0 },
         sizeBytes = bytes.size.toLong(),
-        mimeType = options.outMimeType,
+        mimeType = svgInfo?.mimeType ?: options.outMimeType,
         lastModifiedMs = image.modifiedAtMillis,
     )
 }

@@ -127,6 +127,55 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
         }
     }
 
+    suspend fun mediaMetadata(connection: PlatformConnection, token: String, space: String, path: String): WorkspaceContentMetadata {
+        WorkspaceFileRules.path(path)
+        return readClient.newCall(builder(url(connection, "content", space, path), token)
+            .header("Accept-Encoding", "identity").head().build()).readResponse { response ->
+            requireStatus(response)
+            val length = response.header("Content-Length")?.toLongOrNull()
+                ?: throw IOException("workspace_media_length_missing")
+            require(length in 1..WorkspaceFileRules.MEDIA_LIMIT) { "workspace_media_size_limit" }
+            val etag = response.header("ETag")?.let(WorkspaceFileRules::requireEtag)
+                ?: throw IOException("workspace_media_version_missing")
+            WorkspaceContentMetadata(etag, length, response.header("Content-Type"))
+        }
+    }
+
+    /** One bounded range owns its response through complete validation and consumption. */
+    suspend fun mediaRange(connection: PlatformConnection, token: String, space: String, path: String,
+        metadata: WorkspaceContentMetadata, position: Long, length: Int,
+    ): ByteArray {
+        WorkspaceFileRules.path(path)
+        require(position >= 0 && length > 0 && length <= 8 * 1024 * 1024 && position < metadata.length)
+        val count = minOf(length.toLong(), metadata.length - position).toInt()
+        val end = position + count - 1
+        return readClient.newCall(builder(url(connection, "content", space, path), token)
+            .header("Accept-Encoding", "identity").header("Range", "bytes=$position-$end")
+            .header("If-Match", WorkspaceFileRules.requireEtag(requireNotNull(metadata.etag))).get().build())
+            .readResponse { response ->
+                if (response.code != 206) {
+                    if (response.code != 200) requireStatus(response)
+                    throw IOException("workspace_media_range_required: HTTP ${response.code}")
+                }
+                if (response.header("Content-Range") != "bytes $position-$end/${metadata.length}" ||
+                    response.header("ETag") != metadata.etag || response.body.contentLength() != count.toLong() ||
+                    response.header("Content-Encoding")?.let { it != "identity" } == true) {
+                    throw IOException("workspace_media_range_mismatch")
+                }
+                val bytes = ByteArray(count)
+                response.body.byteStream().use { input ->
+                    var offset = 0
+                    while (offset < count) {
+                        val n = input.read(bytes, offset, count - offset)
+                        if (n < 0) throw IOException("workspace_incomplete_content: $offset/$count")
+                        offset += n
+                    }
+                    if (input.read() != -1) throw IOException("workspace_media_range_excess")
+                }
+                bytes
+            }
+    }
+
     suspend fun upload(connection: PlatformConnection, token: String, space: String, path: String,
         etag: String?, length: Long?, input: () -> InputStream, progress: (Long, Long?) -> Unit = { _, _ -> },
     ): PlatformWorkspaceFileResult {

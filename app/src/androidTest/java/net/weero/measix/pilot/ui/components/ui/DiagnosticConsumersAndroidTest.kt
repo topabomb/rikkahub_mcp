@@ -92,6 +92,7 @@ class DiagnosticConsumersAndroidTest {
         compose.setContent { DiagnosticTestTheme {
             WorkspaceFileEditorPage("workspace", WorkspaceStorageArea.FILES, "draft.txt", commands, queries)
         } }
+        compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).performClick()
         compose.onNode(hasText(error.userVisibleDiagnostic()) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         compose.onAllNodes(hasScrollAction() and hasAnyAncestor(isDialog())).assertCountEquals(1)

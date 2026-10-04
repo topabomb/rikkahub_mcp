@@ -2098,4 +2098,17 @@
   <string name="enterprise_configuration_auth_managed">企业</string>
   <string name="enterprise_configuration_auth_none">无需认证</string>
   <string name="chat_deleted_maintenance_failed">对话已删除，但最近会话记录未能更新。你可以继续开始新对话。</string>
+  <string name="file_find">查找</string>
+  <string name="file_find_previous">上一个</string>
+  <string name="file_find_next">下一个</string>
+  <string name="file_find_no_match">未找到匹配文本</string>
+  <string name="file_go_to_line">跳转行</string>
+  <string name="file_line_number">行号</string>
+  <string name="file_line_invalid">请输入有效行号</string>
+  <string name="file_pdf_go_to_page">跳转到页</string>
+  <string name="file_media_rotate">旋转</string>
+  <string name="file_preview_rendered">预览</string>
+  <string name="file_preview_source">源码</string>
+  <string name="image_viewer_close_content_description">关闭图片预览</string>
+  <string name="image_viewer_load_failed">无法预览图片</string>
 </resources>

@@ -15,6 +15,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
+@org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class WorkspaceApplicationServiceTest {
     private val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0)
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
@@ -23,6 +26,48 @@ class WorkspaceApplicationServiceTest {
         net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
+
+    @Test fun `media creation cancellation after opening closes the untransferred descriptor`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val descriptor = mockk<android.os.ParcelFileDescriptor>(relaxed = true)
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        val entry = me.rerere.workspace.WorkspaceFileEntry("video.mp4", "video.mp4", false, 8, 1)
+        val verifying = CompletableDeferred<Unit>()
+        var stats = 0
+        coEvery { repository.getById("id") } returns workspace()
+        coEvery { repository.statFile("id", area, "video.mp4") } coAnswers {
+            if (++stats > 1) { verifying.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+            entry
+        }
+        coEvery { repository.openPreview("id", area, "video.mp4") } returns descriptor
+        val service = workspaceService(repository, mockk())
+        val opening = async { service.mediaSource("id", area, "video.mp4") }
+        verifying.await()
+        opening.cancel()
+        opening.join()
+        assertTrue(opening.isCancelled)
+        io.mockk.verify(exactly = 1) { descriptor.close() }
+    }
+
+    @Test fun `media descriptor ownership transfers to an idempotently closeable source`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val descriptor = mockk<android.os.ParcelFileDescriptor>(relaxed = true)
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        val entry = me.rerere.workspace.WorkspaceFileEntry("video.mp4", "video.mp4", false, 4294967296L, 1)
+        coEvery { repository.getById("id") } returns workspace()
+        coEvery { repository.statFile("id", area, "video.mp4") } returns entry
+        coEvery { repository.openPreview("id", area, "video.mp4") } returns descriptor
+        io.mockk.every { repository.listFlow() } returns kotlinx.coroutines.flow.flowOf(listOf(workspace()))
+        val source = workspaceService(repository, mockk()).mediaSource("id", area, "video.mp4")
+        assertEquals(4294967296L, source.length)
+        io.mockk.verify(exactly = 0) { descriptor.close() }
+        source.close()
+        source.close()
+        assertTrue(runCatching { source.verifyAccess() }.isFailure)
+        assertTrue(runCatching { source.readRange(0, 1) }.isFailure)
+        io.mockk.verify(exactly = 1) { descriptor.close() }
+        coVerify(exactly = 1) { repository.openPreview("id", area, "video.mp4") }
+    }
 
     @Test fun `batch export captures area and uses provider names with one close per successful item`() = runTest {
         val repository = mockk<WorkspaceRepository>()

@@ -12,6 +12,10 @@ import android.text.InputType
 import android.text.style.ForegroundColorSpan
 import android.text.method.ArrowKeyMovementMethod
 import android.util.TypedValue
+import android.view.MotionEvent
+import android.view.VelocityTracker
+import android.view.ViewConfiguration
+import android.widget.OverScroller
 import android.view.Gravity
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -19,10 +23,14 @@ import android.widget.EditText
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,6 +45,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -48,6 +57,7 @@ import me.rerere.highlight.HighlightTextColorPalette
 import me.rerere.highlight.HighlightToken
 import me.rerere.highlight.CodeHighlighter
 import me.rerere.highlight.highlightTokenStyle
+import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.AtomOneDarkPalette
 import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
@@ -89,8 +99,10 @@ fun FileTextEditor(
     supportingText: (@Composable () -> Unit)? = null,
     isError: Boolean = false,
     fileName: String? = null,
+    showNavigation: Boolean = false,
 ) {
     require(minLines >= 1 && maxLines >= minLines)
+    var nativeView by remember(state) { mutableStateOf<FileEditText?>(null) }
     val colors = MaterialTheme.colorScheme
     val borderColor = if (isError) colors.error else colors.outline
     val foreground = colors.onSurface.copy(alpha = if (enabled) 1f else .38f)
@@ -123,6 +135,7 @@ fun FileTextEditor(
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (showNavigation) FileTextNavigation(state, nativeView, enabled)
         Column(
             Modifier.fillMaxWidth()
                 .then(if (fillViewport) Modifier.weight(1f) else Modifier)
@@ -136,8 +149,12 @@ fun FileTextEditor(
             }
             key(state) {
                 AndroidView(
-                    factory = { context -> FileEditText(context, state) },
-                    onRelease = { view -> view.clearSyntaxHighlight() },
+                    factory = { context -> FileEditText(context, state).also { nativeView = it } },
+                    onRelease = { view ->
+                        view.stopScrolling()
+                        view.clearSyntaxHighlight()
+                        if (nativeView === view) nativeView = null
+                    },
                     modifier = Modifier.fillMaxWidth().then(
                         if (fillViewport) Modifier.weight(1f).fillMaxSize() else Modifier
                     ),
@@ -161,11 +178,114 @@ fun FileTextEditor(
     }
 }
 
+@Composable
+private fun FileTextNavigation(state: FileEditorState, view: FileEditText?, enabled: Boolean) {
+    var finding by remember(state) { mutableStateOf(false) }
+    var query by remember(state) { mutableStateOf("") }
+    var noMatch by remember(state) { mutableStateOf(false) }
+    var lineDialog by remember(state) { mutableStateOf(false) }
+    var lineNumber by remember(state) { mutableStateOf("") }
+    var invalidLine by remember(state) { mutableStateOf(false) }
+    LaunchedEffect(state.revision, query) { noMatch = false }
+    fun find(forward: Boolean) {
+        val editor = view ?: return
+        val offset = if (forward) editor.selectionEnd.coerceAtLeast(0)
+            else editor.selectionStart.coerceAtLeast(0) - 1
+        val match = findFileText(state.editable, query, offset, forward)
+        noMatch = match < 0
+        if (match >= 0) editor.revealRange(match, match + query.length)
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth()) {
+            TextButton(onClick = { finding = !finding }, enabled = enabled) {
+                Text(stringResource(R.string.file_find))
+            }
+            TextButton(onClick = { lineNumber = ""; invalidLine = false; lineDialog = true }, enabled = enabled) {
+                Text(stringResource(R.string.file_go_to_line))
+            }
+        }
+        if (finding) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                enabled = enabled,
+                label = { Text(stringResource(R.string.file_find)) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                isError = noMatch,
+                supportingText = if (noMatch) ({ Text(stringResource(R.string.file_find_no_match)) }) else null,
+            )
+            Row {
+                TextButton(onClick = { find(false) }, enabled = enabled && query.isNotEmpty()) {
+                    Text(stringResource(R.string.file_find_previous))
+                }
+                TextButton(onClick = { find(true) }, enabled = enabled && query.isNotEmpty()) {
+                    Text(stringResource(R.string.file_find_next))
+                }
+                TextButton(onClick = { finding = false }) { Text(stringResource(R.string.update_card_close)) }
+            }
+        }
+    }
+    if (lineDialog) AlertDialog(
+        onDismissRequest = { lineDialog = false },
+        title = { Text(stringResource(R.string.file_go_to_line)) },
+        text = {
+            OutlinedTextField(
+                value = lineNumber,
+                onValueChange = { lineNumber = it; invalidLine = false },
+                singleLine = true,
+                label = { Text(stringResource(R.string.file_line_number)) },
+                isError = invalidLine,
+                supportingText = if (invalidLine) ({ Text(stringResource(R.string.file_line_invalid)) }) else null,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val offset = fileLineOffset(state.editable, lineNumber.toIntOrNull() ?: 0)
+                invalidLine = offset < 0
+                if (offset >= 0) { view?.revealRange(offset); lineDialog = false }
+            }) { Text(stringResource(R.string.confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = { lineDialog = false }) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
+/** Literal, case-insensitive search without a second document copy or persistent index. */
+internal fun findFileText(text: CharSequence, query: String, from: Int, forward: Boolean): Int {
+    if (query.isEmpty()) return -1
+    return if (forward) {
+        text.indexOf(query, from.coerceAtLeast(0), ignoreCase = true).takeIf { it >= 0 }
+            ?: text.indexOf(query, ignoreCase = true)
+    } else {
+        (if (from >= 0) text.lastIndexOf(query, from, ignoreCase = true) else -1).takeIf { it >= 0 }
+            ?: text.lastIndexOf(query, ignoreCase = true)
+    }
+}
+
+/** Logical source lines, independent of wrapping width. A trailing newline has an empty last line. */
+internal fun fileLineOffset(text: CharSequence, line: Int): Int {
+    if (line < 1) return -1
+    if (line == 1) return 0
+    var current = 1
+    for (index in text.indices) if (text[index] == '\n' && ++current == line) return index + 1
+    return -1
+}
+
 // Compose owns styling; file editing keeps the platform buffer and input protocol without
 // AppCompat's emoji/content adapters. FileEditorInputConnection bounds the platform IME queries.
 @SuppressLint("AppCompatCustomView")
 internal class FileEditText(context: Context, state: FileEditorState) : EditText(context) {
     private val editingKeyListener: android.text.method.KeyListener
+    private val flingScroller = OverScroller(context)
+    private val touchConfiguration = ViewConfiguration.get(context)
+    private var velocityTracker: VelocityTracker? = null
+    private var downY = 0f
+    private var dragged = false
+    private var selecting = false
+    private var touchRevision = 0
+    private val draft = state
     private var currentReadOnly = false
     private var syntaxHighlight: FileSyntaxHighlight? = null
     private var syntaxPalette: HighlightTextColorPalette? = null
@@ -195,12 +315,95 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
 
     fun updateReadOnly(readOnly: Boolean) {
         if (currentReadOnly == readOnly) return
+        stopScrolling()
+        val oldScroll = scrollY
+        val oldStart = selectionStart
+        val oldEnd = selectionEnd
         currentReadOnly = readOnly
         keyListener = if (readOnly) null else editingKeyListener
         setTextIsSelectable(readOnly)
         movementMethod = ArrowKeyMovementMethod.getInstance()
         isFocusableInTouchMode = true
         isCursorVisible = !readOnly
+        showSoftInputOnFocus = !readOnly
+        if (oldStart >= 0 && oldEnd >= 0) setSelection(oldStart.coerceAtMost(length()), oldEnd.coerceAtMost(length()))
+        scrollTo(0, oldScroll)
+    }
+
+    internal fun stopScrolling() {
+        flingScroller.forceFinished(true)
+        velocityTracker?.recycle()
+        velocityTracker = null
+    }
+
+    override fun performLongClick(): Boolean {
+        selecting = true
+        return super.performLongClick()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                stopScrolling()
+                downY = event.y
+                dragged = false
+                selecting = hasSelection()
+                touchRevision = draft.revision
+                velocityTracker = VelocityTracker.obtain()
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> selecting = true
+            MotionEvent.ACTION_MOVE -> {
+                if (kotlin.math.abs(event.y - downY) > touchConfiguration.scaledTouchSlop) dragged = true
+            }
+        }
+        velocityTracker?.addMovement(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP && dragged && !selecting &&
+            !hasSelection() && touchRevision == draft.revision) {
+            val tracker = velocityTracker
+            tracker?.computeCurrentVelocity(1000, touchConfiguration.scaledMaximumFlingVelocity.toFloat())
+            val velocity = -(tracker?.yVelocity ?: 0f).toInt()
+            // Native movement owns dragging. Cancel its UP so reading does not relocate the
+            // cursor or open the keyboard; only the inertial continuation belongs here.
+            val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+            try { super.onTouchEvent(cancel) } finally { cancel.recycle() }
+            stopScrolling()
+            if (kotlin.math.abs(velocity) >= touchConfiguration.scaledMinimumFlingVelocity) {
+                flingScroller.fling(0, scrollY, 0, velocity, 0, 0, 0, maximumScrollY())
+                postInvalidateOnAnimation()
+            }
+            return true
+        }
+        val handled = super.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            velocityTracker?.recycle()
+            velocityTracker = null
+        }
+        return handled
+    }
+
+    private fun maximumScrollY(): Int =
+        ((layout?.height ?: 0) - (height - totalPaddingTop - totalPaddingBottom)).coerceAtLeast(0)
+
+    override fun computeScroll() {
+        super.computeScroll()
+        if (!flingScroller.isFinished && draft.revision != touchRevision) flingScroller.forceFinished(true)
+        if (flingScroller.computeScrollOffset()) {
+            scrollTo(0, flingScroller.currY.coerceIn(0, maximumScrollY()))
+            postInvalidateOnAnimation()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        stopScrolling()
+        super.onDetachedFromWindow()
+    }
+
+    internal fun revealRange(start: Int, end: Int = start) {
+        stopScrolling()
+        setSelection(start, end)
+        val textLayout = layout ?: return
+        val line = textLayout.getLineForOffset(start)
+        scrollTo(0, (textLayout.getLineTop(line) - height / 3).coerceIn(0, maximumScrollY()))
     }
 
     internal fun updateSyntaxHighlight(highlight: FileSyntaxHighlight?, palette: HighlightTextColorPalette) {

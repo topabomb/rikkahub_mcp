@@ -74,6 +74,10 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.WorkspaceFileRules
 import net.weero.measix.pilot.service.remoteworkspace.*
 import net.weero.measix.pilot.ui.components.files.FileRow
+import net.weero.measix.pilot.ui.components.files.FileType
+import net.weero.measix.pilot.ui.components.files.fileType
+import net.weero.measix.pilot.ui.components.files.MediaPreview
+import net.weero.measix.pilot.service.files.MediaPreviewSource
 import net.weero.measix.pilot.ui.components.files.PdfPreview
 import net.weero.measix.pilot.ui.components.richtext.RestrictedMarkdown
 import net.weero.measix.pilot.ui.components.files.FileTextEditor
@@ -412,7 +416,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                             metadata = if (wide) { { RemoteFileColumns(file) } } else null,
                             thumbnail = if (file.directory) null else { {
                                 Icon(when {
-                                    file.name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp") -> HugeIcons.Image01
+                                    fileType(file.name) == FileType.IMAGE -> HugeIcons.Image01
                                     file.name.endsWith(".pdf", ignoreCase = true) -> HugeIcons.Pdf01
                                     fileTextFormat(file.name) != null -> HugeIcons.FileEdit
                                     else -> HugeIcons.File02
@@ -772,9 +776,11 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
         editor.revision
         editorSession.document?.let { editor.snapshot() != it.content.text } == true
     } }
-    val extension = file.name.substringAfterLast('.', "").lowercase()
-    val image = extension in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
-    val markdown = extension in setOf("md", "markdown")
+    val type = fileType(file.name)
+    var sourceView by remember(file, handle) { mutableStateOf(false) }
+    var media by remember(file, handle) { mutableStateOf<MediaPreviewSource?>(null) }
+    val image = type == FileType.IMAGE
+    val markdown = type == FileType.MARKDOWN
     fun close() { if (saving) return else if (dirty) discard = true else onClose() }
     BackHandler { close() }
     LaunchedEffect(file, handle, reload) {
@@ -784,7 +790,12 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
             if (reload > 0) vm.service.refresh(handle.selection)
             when {
                 image -> Unit
-                extension == "pdf" -> pdf = vm.service.previewCopy(handle, file)
+                type == FileType.PDF -> pdf = vm.service.previewCopy(handle, file)
+                type == FileType.VIDEO || type == FileType.AUDIO -> {
+                    val source = vm.service.mediaSource(handle, file)
+                    try { media = source; loading = false; kotlinx.coroutines.awaitCancellation() }
+                    finally { source.close() }
+                }
                 fileTextFormat(file.name) != null -> {
                     val fresh = vm.service.readText(handle, file)
                     editorSession.accept(fresh)
@@ -812,9 +823,23 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
         if (saving || state.running || loading) return
         vm.save(handle, original, editor.snapshot(), destination)
     }
-    if (image) {
+    media?.let {
+        MediaPreview(it, onClose, onExternal = { onShare(true) }, onDownload = onDownload,
+            speechPlayback = org.koin.compose.koinInject<net.weero.measix.pilot.service.SpeechApplicationService>().playback,
+            actionsEnabled = !state.running, status = {
+                if (state.running || state.error != null) Surface {
+                    Column(Modifier.fillMaxWidth().padding(8.dp)) {
+                        if (state.running) TransferStatus(state, vm::cancel)
+                        state.error?.let { Diagnostic(it) }
+                    }
+                }
+            })
+        return
+    }
+    if (image || (type == FileType.SVG && !sourceView && !editing && document != null)) {
         val source = remember(file, handle) { vm.service.imageSource(handle, file) }
-        ImagePreviewDialog(listOf(source), onDismissRequest = onClose,
+        ImagePreviewDialog(listOf(source), onDismissRequest = { if (type == FileType.SVG) sourceView = true else onClose() },
+            showSaveAction = type != FileType.SVG,
             onInfoRetry = { vm.service.refresh(handle.selection) }, extraActions = listOf(
             net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(HugeIcons.SquareArrowUpRight,
                 stringResource(R.string.remote_workspace_open_external)) { _, _ -> if (!state.running) onShare(true) },
@@ -831,6 +856,9 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
     Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = { IconButton({ close() }, enabled = !saving) { Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back)) } },
         actions = {
+            if (document != null && !editing && (markdown || type == FileType.SVG)) TextButton({ sourceView = !sourceView }) {
+                Text(stringResource(if (sourceView) R.string.file_preview_rendered else R.string.file_preview_source))
+            }
             if (document != null && !editing) Tooltip(tooltip = { Text(stringResource(R.string.edit)) }) {
                 IconButton({ editorSession.editing = true }, enabled = !state.running && !loading) {
                     Icon(HugeIcons.FileEdit, stringResource(R.string.edit))
@@ -874,7 +902,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
             }
             if (editing && document?.file?.versioned == false) Text(stringResource(R.string.remote_workspace_no_version))
             when {
-                document != null && markdown && !editing -> RestrictedMarkdown(requireNotNull(document).content.text,
+                document != null && markdown && !editing && !sourceView -> RestrictedMarkdown(requireNotNull(document).content.text,
                     Modifier.weight(1f).verticalScroll(rememberScrollState()), imageResolver) { uri ->
                     scope.launch { try { if (vm.service.isValid(handle)) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri))) }
                     catch (cancelled: CancellationException) { throw cancelled }
@@ -885,6 +913,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     enabled = !saving && !loading,
                     readOnly = !editing,
+                    showNavigation = true,
                     fillViewport = true,
                     fileName = file.name,
                 )

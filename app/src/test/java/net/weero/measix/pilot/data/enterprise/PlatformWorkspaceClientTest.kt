@@ -34,6 +34,135 @@ class PlatformWorkspaceClientTest {
         val bytes = text.toByteArray(); sendResponseHeaders(status, bytes.size.toLong()); responseBody.write(bytes)
     }
 
+    @Test fun `media preserves standard conditional lock and range failures without replay`() = runBlocking {
+        for ((status, code) in listOf(412 to "file_version_conflict", 423 to "file_locked", 416 to "file_range_invalid", 409 to "file_version_conflict")) {
+            val calls = AtomicInteger()
+            val server = server {
+                calls.incrementAndGet()
+                responseHeaders.set("Content-Type", "application/problem+json")
+                reply(status, """{"type":"about:blank","title":"File unavailable","status":$status,"code":"$code"}""")
+            }
+            try {
+                try {
+                    client.mediaRange(connection(server), "token", space, "movie.mp4", WorkspaceContentMetadata("\"v1\"", 100, null), 0, 8)
+                    fail("HTTP $status must reject the media read")
+                } catch (failure: PlatformHttpException) {
+                    assertEquals(status, failure.status)
+                    assertEquals(code, failure.problem?.code)
+                }
+                assertEquals(1, calls.get())
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `media HEAD preserves four GiB length and strong version`() = runBlocking {
+        val total = 4L * 1024 * 1024 * 1024
+        val server = server {
+            assertEquals("HEAD", requestMethod)
+            assertEquals("identity", requestHeaders.getFirst("Accept-Encoding"))
+            assertEquals("Bearer token", requestHeaders.getFirst("Authorization"))
+            responseHeaders.set("Content-Length", total.toString())
+            responseHeaders.set("ETag", "\"video-v1\"")
+            responseHeaders.set("Content-Type", "video/mp4")
+            sendResponseHeaders(200, -1)
+        }
+        try {
+            val metadata = client.mediaMetadata(connection(server), "token", space, "movie.mp4")
+            assertEquals(total, metadata.length)
+            assertEquals("\"video-v1\"", metadata.etag)
+            assertEquals("video/mp4", metadata.contentType)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `media HEAD rejects missing weak or oversized identity`() = runBlocking {
+        for ((length, etag) in listOf(
+            null to "\"v1\"", "0" to "\"v1\"", "4294967297" to "\"v1\"",
+            "8" to null, "8" to "W/\"v1\"",
+        )) {
+            val server = server {
+                length?.let { responseHeaders.set("Content-Length", it) }
+                etag?.let { responseHeaders.set("ETag", it) }
+                sendResponseHeaders(200, -1)
+            }
+            try {
+                var failure: Exception? = null
+                try { client.mediaMetadata(connection(server), "token", space, "movie.mp4") }
+                catch (error: Exception) { failure = error }
+                assertNotNull("Invalid media identity accepted: $length/$etag", failure)
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `media ranges keep large offsets and clamp the final four GiB range`() = runBlocking {
+        val total = 4L * 1024 * 1024 * 1024
+        val metadata = WorkspaceContentMetadata("\"video-v1\"", total, "video/mp4")
+        for (position in listOf(0L, 2147483647L, 2147483648L, total - 4, total - 1)) {
+            val count = minOf(8L, total - position).toInt()
+            val expected = ByteArray(count) { ((position + it) and 255).toByte() }
+            val calls = AtomicInteger()
+            val server = server {
+                calls.incrementAndGet()
+                assertEquals("GET", requestMethod)
+                assertEquals("bytes=$position-${position + count - 1}", requestHeaders.getFirst("Range"))
+                assertEquals(metadata.etag, requestHeaders.getFirst("If-Match"))
+                assertEquals("identity", requestHeaders.getFirst("Accept-Encoding"))
+                responseHeaders.set("ETag", metadata.etag)
+                responseHeaders.set("Content-Range", "bytes $position-${position + count - 1}/$total")
+                sendResponseHeaders(206, count.toLong())
+                responseBody.write(expected)
+            }
+            try {
+                assertArrayEquals(expected, client.mediaRange(connection(server), "token", space, "movie.mp4", metadata, position, 8))
+                assertEquals(1, calls.get())
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `media rejects ignored range changed version wrong bounds and encoded content`() = runBlocking {
+        val metadata = WorkspaceContentMetadata("\"v1\"", 100, "video/mp4")
+        for (fault in listOf("status", "etag", "range", "total", "length", "encoding")) {
+            val calls = AtomicInteger()
+            val server = server {
+                calls.incrementAndGet()
+                responseHeaders.set("ETag", if (fault == "etag") "\"v2\"" else metadata.etag)
+                responseHeaders.set("Content-Range", when (fault) {
+                    "range" -> "bytes 1-8/100"
+                    "total" -> "bytes 0-7/101"
+                    else -> "bytes 0-7/100"
+                })
+                if (fault == "encoding") responseHeaders.set("Content-Encoding", "gzip")
+                val bytes = ByteArray(if (fault == "length") 9 else 8)
+                sendResponseHeaders(if (fault == "status") 200 else 206, bytes.size.toLong())
+                responseBody.write(bytes)
+            }
+            try {
+                var failure: IOException? = null
+                try { client.mediaRange(connection(server), "token", space, "movie.mp4", metadata, 0, 8) }
+                catch (error: IOException) { failure = error }
+                assertNotNull("Invalid range accepted: $fault", failure)
+                assertEquals(1, calls.get())
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `media truncated range fails without returning partial bytes or replaying`() = runBlocking {
+        val calls = AtomicInteger()
+        val server = server {
+            calls.incrementAndGet()
+            responseHeaders.set("ETag", "\"v1\"")
+            responseHeaders.set("Content-Range", "bytes 0-7/100")
+            sendResponseHeaders(206, 8)
+            responseBody.write(byteArrayOf(1, 2, 3))
+        }
+        try {
+            var failure: IOException? = null
+            try { client.mediaRange(connection(server), "token", space, "movie.mp4", WorkspaceContentMetadata("\"v1\"", 100, null), 0, 8) }
+            catch (error: IOException) { failure = error }
+            assertNotNull(failure)
+            assertEquals(1, calls.get())
+        } finally { server.stop(0) }
+    }
+
     @Test fun `files only and unprovisioned fixtures strictly decode`() {
         for (name in listOf("projection-files-only.json", "projection-unprovisioned.json")) {
             val raw = javaClass.getResourceAsStream("/contracts/workspace/$name")!!.bufferedReader().use { it.readText() }

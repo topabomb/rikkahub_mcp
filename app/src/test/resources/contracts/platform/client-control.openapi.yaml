@@ -592,8 +592,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '409':
-          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
-            edits and never overwrite automatically.
+          description: workspace_space_mismatch or file_conflict; refresh the target and preserve edits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict; HTTP or DAV precondition failed. Preserve edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '423':
+          description: file_locked; verify the lock before retrying. Preserve edits.
           content:
             application/problem+json:
               schema:
@@ -669,8 +680,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '409':
-          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
-            edits and never overwrite automatically.
+          description: workspace_space_mismatch or file_conflict; refresh the target and preserve edits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict; HTTP or DAV precondition failed. Preserve edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '423':
+          description: file_locked; verify the lock before retrying. Preserve edits.
           content:
             application/problem+json:
               schema:
@@ -799,8 +821,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '409':
-          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
-            edits and never overwrite automatically.
+          description: workspace_space_mismatch or file_conflict; refresh the target and preserve edits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict; HTTP or DAV precondition failed. Preserve edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '423':
+          description: file_locked; verify the lock before retrying. Preserve edits.
           content:
             application/problem+json:
               schema:
@@ -892,6 +925,12 @@ paths:
                 type: string
         '416':
           description: file_range_invalid; requested range cannot be served.
+          headers:
+            Content-Range:
+              description: Valid upstream unsatisfied byte range, including the current representation length. Omitted if upstream does not provide a valid value.
+              schema:
+                type: string
+                pattern: '^bytes \*/[0-9]+$'
           content:
             application/problem+json:
               schema:
@@ -958,8 +997,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '409':
-          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
-            edits and never overwrite automatically.
+          description: workspace_space_mismatch or file_conflict; refresh the target and preserve edits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict; HTTP or DAV precondition failed. Preserve edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '423':
+          description: file_locked; verify the lock before retrying. Preserve edits.
           content:
             application/problem+json:
               schema:
@@ -1085,8 +1135,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '409':
-          description: workspace_space_mismatch, file_version_conflict, file_conflict or file_locked; refresh the target, preserve
-            edits and never overwrite automatically.
+          description: workspace_space_mismatch or file_conflict; refresh the target and preserve edits.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict; HTTP or DAV precondition failed. Preserve edits and never overwrite automatically.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '423':
+          description: file_locked; verify the lock before retrying. Preserve edits.
           content:
             application/problem+json:
               schema:
@@ -1117,33 +1178,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
-        '206':
-          description: Partial byte range.
-          headers:
-            ETag:
-              description: Opaque version of these bytes; preserve quotes. Use with If-Match for editing and resumed downloads.
-              schema:
-                type: string
-            Last-Modified:
-              description: Remote HTTP modification date when available.
-              schema:
-                type: string
-            Content-Length:
-              description: Response byte length when known.
-              schema:
-                type: string
-            Content-Range:
-              description: Selected range for 206.
-              schema:
-                type: string
-            Accept-Ranges:
-              description: Remote byte range support.
-              schema:
-                type: string
-            Content-Disposition:
-              description: Attachment filename; never execute as same-origin HTML.
-              schema:
-                type: string
         '304':
           description: Not modified; no body.
           headers:
@@ -1173,6 +1207,12 @@ paths:
                 type: string
         '416':
           description: file_range_invalid; requested range cannot be served.
+          headers:
+            Content-Range:
+              description: Valid upstream unsatisfied byte range, including the current representation length. Omitted if upstream does not provide a valid value.
+              schema:
+                type: string
+                pattern: '^bytes \*/[0-9]+$'
           content:
             application/problem+json:
               schema:

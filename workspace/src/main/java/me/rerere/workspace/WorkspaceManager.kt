@@ -38,6 +38,9 @@ class WorkspaceManager(
     fun openDocument(root: String, path: String, mode: Int): android.os.ParcelFileDescriptor =
         WorkspaceDirectoryHandle(filesDir(root)).use { it.open(path, mode) }
 
+    fun openPreview(root: String, area: WorkspaceStorageArea, path: String): android.os.ParcelFileDescriptor =
+        WorkspaceDirectoryHandle(areaDir(root, area)).use { it.open(path, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }
+
     fun createDocument(root: String, path: String, name: String, directory: Boolean): String =
         WorkspaceDirectoryHandle(filesDir(root)).use { it.create(path, name, directory) }
 

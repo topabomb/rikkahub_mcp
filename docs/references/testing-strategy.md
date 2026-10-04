@@ -178,3 +178,22 @@ AndroidX JSON 的 `sampledMetrics` 保留耗时与分配的原始 `runs` 及分�
 
 `.github/workflows/benchmark.yml` 仅供手动模拟器诊断，保留 JSON 与 trace，不设性能通过阈值。
 只有固定实机和系统下的结果适合与同环境 baseline 比较；有执行入口不代表已经采集基线。
+
+### 文件预览设备场景
+
+`MediaPreviewAndroidTest` 使用项目内的短 MP4 验证解码、原生控制条、拖动、全屏返回、后台停止及撤权；
+4 GiB 稀疏 MP4 将真实媒体数据放到超过 2 GiB 的偏移，验证 Long 寻址与有界读取，不代表 4 GiB 网络吞吐或持续播放测试。
+图片查看器、静态 SVG 验证和 `EditorInputConnectionAndroidTest` 分别覆盖图片操作、解析边界与原生惯性/查找/跳行。
+编辑器的键盘缩放断言显式使用停靠键盘，并在 finally 恢复原手写模式；浮动手写 IME 可见但底部 inset 为零，不代表正文应缩短。
+这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
+
+`RemoteMediaPreviewLiveAndroidTest` 使用已接入的专用设备，以 `remotePreviewLive=true` 显式启用；采用保留数据安装和直接
+instrumentation，不用会卸载应用的 connected 任务。测试通过原远程服务上传短 MP4，在真实文件页面检查播放、暂停拖动后的
+新画面、横竖屏、关闭释放和旧 ETag 拒绝。不得为了测试修改企业发布、助手绑定或工作卷容量。
+
+4 GiB 样本采用宿主协作：设备在 cache 写出 `remote-preview-sparse-request.json`，含本次 UUID 目录与原 `agentSpaceId`。
+宿主核对它与真实服务/运行环境身份一致后，通过官方 guest 执行入口运行测试资源 `media/sparse-preview.py`，参数是该目录的
+`short.mp4` 和 `four-gib.mp4`。脚本独占创建稀疏文件，实际媒体数据位于 3 GiB，不能从 Host 挂载运行中工作卷或覆盖原文件。
+成功后将目录名写入同 cache 的临时文件，再原子改名为 `remote-preview-sparse.done`；禁止预写回执。
+设备验证 4 GiB HEAD、跨 2 GiB 与末尾 Range 及真实解码，finally 删除本次目录与握手文件，将结果写入
+`remote-preview-live-evidence.json`。截图位于应用 external files。测试仍不代表完整 4 GiB 网络传输或高码率持续播放。

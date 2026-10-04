@@ -2106,4 +2106,17 @@
   <string name="enterprise_configuration_auth_managed">Enterprise</string>
   <string name="enterprise_configuration_auth_none">No authentication required</string>
   <string name="chat_deleted_maintenance_failed">The chat was deleted, but its recent-chat shortcut could not be updated. You can start a new chat.</string>
+  <string name="file_find">Find</string>
+  <string name="file_find_previous">Previous</string>
+  <string name="file_find_next">Next</string>
+  <string name="file_find_no_match">No matching text</string>
+  <string name="file_go_to_line">Go to line</string>
+  <string name="file_line_number">Line number</string>
+  <string name="file_line_invalid">Enter an existing line number</string>
+  <string name="file_pdf_go_to_page">Go to page</string>
+  <string name="file_media_rotate">Rotate</string>
+  <string name="file_preview_rendered">Preview</string>
+  <string name="file_preview_source">Source</string>
+  <string name="image_viewer_close_content_description">Close image preview</string>
+  <string name="image_viewer_load_failed">Unable to preview image</string>
 </resources>

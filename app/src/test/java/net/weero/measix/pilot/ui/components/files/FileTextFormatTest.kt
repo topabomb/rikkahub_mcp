@@ -15,7 +15,7 @@ class FileTextFormatTest {
         val highlighter = CodeHighlighter()
         cases.forEach { (name, language) ->
             assertEquals(name, language, fileTextFormat(name)?.language)
-            assertEquals(name, FileType.TEXT, fileType(name))
+            assertEquals(name, if (name.endsWith(".svg")) FileType.SVG else FileType.TEXT, fileType(name))
             assertTrue(language, highlighter.supports(language))
         }
     }
@@ -29,6 +29,10 @@ class FileTextFormatTest {
             }
         listOf("photo.png", "document.pdf", "archive.zip", "program.exe").forEach { assertNull(fileTextFormat(it)) }
         assertEquals(FileType.IMAGE, fileType("photo.png"))
-        assertEquals(FileType.OTHER, fileType("document.pdf"))
+        assertEquals(FileType.PDF, fileType("document.pdf"))
+        listOf("readme.md", "readme.markdown", "readme.mdown", "readme.mkd").forEach { assertEquals(FileType.MARKDOWN, fileType(it)) }
+        assertEquals(FileType.VIDEO, fileType("clip.MP4"))
+        assertEquals(FileType.AUDIO, fileType("audio.flac"))
+        assertEquals(FileType.TEXT, fileType("module.ts"))
     }
 }

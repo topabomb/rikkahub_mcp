@@ -87,6 +87,15 @@ class WorkspaceRepository(
     suspend fun transferDocument(sourceRoot: String, path: String, targetRoot: String, targetPath: String, move: Boolean) =
         runInterruptible(Dispatchers.IO) { manager.transferDocument(sourceRoot, path, targetRoot, targetPath, move) }
 
+    suspend fun openPreview(id: String, area: WorkspaceStorageArea, path: String): android.os.ParcelFileDescriptor {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        var opened: android.os.ParcelFileDescriptor? = null
+        return try {
+            runInterruptible(Dispatchers.IO) { opened = manager.openPreview(workspace.root, area, path) }
+            requireNotNull(opened)
+        } catch (error: Throwable) { opened?.close(); throw error }
+    }
+
     suspend fun openDocument(root: String, path: String, mode: Int): android.os.ParcelFileDescriptor {
         var opened: android.os.ParcelFileDescriptor? = null
         try {
