@@ -2081,7 +2081,6 @@
   <string name="chat_deleted_continuation_failed">The conversation was deleted, but a new chat could not be opened. Go to Spaces to continue.</string>
   <string name="enterprise_refresh_status">Refresh status</string>
   <string name="enterprise_all_chat_history">All chat history</string>
-  <string name="enterprise_applied_version_summary">Currently applied version %1$d</string>
   <string name="remote_workspace_query_failed">Remote workspace status could not be confirmed</string>
   <string name="enterprise_publication_release">Release ID</string>
   <string name="enterprise_publication_hash">Configuration SHA-256</string>

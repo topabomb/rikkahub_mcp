@@ -2073,7 +2073,6 @@
   <string name="chat_deleted_continuation_failed">대화가 삭제되었지만 새 채팅을 열지 못했습니다. 공간에서 계속하세요.</string>
   <string name="enterprise_refresh_status">상태 새로고침</string>
   <string name="enterprise_all_chat_history">전체 채팅 기록</string>
-  <string name="enterprise_applied_version_summary">현재 적용된 버전 %1$d</string>
   <string name="remote_workspace_query_failed">원격 작업 공간 상태를 확인하지 못했습니다</string>
   <string name="enterprise_publication_release">릴리스 ID</string>
   <string name="enterprise_publication_hash">구성 SHA-256</string>

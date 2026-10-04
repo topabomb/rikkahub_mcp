@@ -152,10 +152,12 @@ private fun EnterpriseSynchronizationNotice(failure: EnterpriseSynchronizationFa
     Column(Modifier.fillMaxWidth().testTag("enterprise-synchronization-notice")) {
         Text(stringResource(synchronizationText(failure.issue)), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(failure.diagnostic)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(failure.diagnostic,
+                modifier = Modifier.defaultMinSize(minWidth = 1.dp), contentPadding = PaddingValues(0.dp))
             if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP) {
-                TextButton(onClick = { nav.navigate(Screen.SettingAbout) }) {
+                TextButton(onClick = { nav.navigate(Screen.SettingAbout) }, contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.defaultMinSize(minWidth = 1.dp)) {
                     Text(stringResource(R.string.setting_page_about))
                 }
             }
@@ -275,7 +277,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         }
     }
     var pageMenuOpen by remember { mutableStateOf(false) }
-    var connectionMenuOpen by remember { mutableStateOf(false) }
     var usageOpen by rememberSaveable { mutableStateOf(false) }
     var paste by remember { mutableStateOf(false) }
     var configurationDetailsOpen by rememberSaveable { mutableStateOf(false) }
@@ -424,6 +425,22 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                         R.string.enterprise_reset_repair else R.string.enterprise_reset_title)) },
                                     enabled = !busy && state?.reset == null,
                                     onClick = { pageMenuOpen = false; vm.showReset() },
+                                )
+                            }
+                            if (state?.access != null) {
+                                HorizontalDivider()
+                                if (state?.platformOrigin != null) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.enterprise_address_edit_title)) },
+                                        enabled = !busy,
+                                        onClick = { pageMenuOpen = false; vm.editAddress() },
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.enterprise_exit)) },
+                                    enabled = !busy,
+                                    colors = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.error),
+                                    onClick = { pageMenuOpen = false; vm.requestExit() },
                                 )
                             }
                         }
@@ -580,72 +597,9 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         else stringResource(R.string.enterprise_connected_enterprise,
                             state?.enterpriseName ?: stringResource(R.string.enterprise_space)),
                         leadingContent = { OrchelmLogo(Modifier.size(24.dp)) },
-                        trailingContent = {
-                            Box {
-                                IconButton(onClick = { connectionMenuOpen = true }, enabled = !busy,
-                                    modifier = Modifier.testTag("enterprise-connection-menu")) {
-                                    Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
-                                }
-                                DropdownMenu(expanded = connectionMenuOpen, onDismissRequest = { connectionMenuOpen = false }) {
-                                    if (state?.platformOrigin != null) {
-                                        DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.enterprise_address_edit_title)) },
-                                            onClick = { connectionMenuOpen = false; vm.editAddress() },
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.enterprise_exit)) },
-                                        onClick = { connectionMenuOpen = false; vm.requestExit() },
-                                    )
-                                }
-                            }
-                        },
                     ) {
-                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            state?.userName?.let { Text(it) }
-                            Text(stringResource(if (state?.synchronization?.failure != null)
-                                R.string.enterprise_configuration_attention else phaseText(state?.phase)),
-                                color = MaterialTheme.colorScheme.primary)
-                        }
-                        if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING && state?.synchronization?.failure == null) {
-                            Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall)
-                        }
-                        state?.synchronization?.failure?.let { EnterpriseSynchronizationNotice(it) }
-                        state?.generation?.let { generation ->
-                            Text(stringResource(R.string.enterprise_applied_version_summary, generation),
-                                style = MaterialTheme.typography.bodyMedium)
-                            Text(stringResource(R.string.enterprise_configuration_last_sync) + "  " +
-                                (state?.lastSyncMillis?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, currentLocale()).format(Date(it)) }
-                                    ?: stringResource(R.string.enterprise_configuration_not_available)),
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        val localWorkspace by vm.workspaceSummary.collectAsStateWithLifecycle()
-                        val workspaceFailure by vm.workspaceFailure.collectAsStateWithLifecycle()
-                        (workspaceFailure?.takeIf { inEnterprise }?.detail ?: workspaceQuery
-                            ?.takeIf { inEnterprise && it.selection == state?.selection && localWorkspace == null }?.diagnostic)?.let { detail ->
-                                Text(stringResource(R.string.remote_workspace_query_failed), color = MaterialTheme.colorScheme.error)
-                                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
-                                TextButton(onClick = vm::refreshWorkspace) { Text(stringResource(R.string.application_recovery_retry)) }
-                            }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!inEnterprise && state?.canEnterEnterprise == true) {
-                                Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                                    Text(stringResource(R.string.enterprise_switch_enterprise))
-                                }
-                            }
-                            TextButton(onClick = vm::synchronize,
-                                enabled = !busy && state?.synchronization?.syncing != true && state?.canEnterEnterprise == true,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                                Icon(HugeIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.enterprise_sync))
-                            }
-                            if (configurationDetails != null) {
-                                TextButton(onClick = { configurationDetailsOpen = true }, enabled = !busy) {
-                                    Text(stringResource(R.string.enterprise_configuration_details_open))
-                                }
-                            }
+                        state?.userName?.let {
+                            Text(it, style = MaterialTheme.typography.bodyMedium)
                         }
                         state?.platformOrigin?.let { origin ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -661,6 +615,62 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                     toaster.show(copiedText)
                                 } }) {
                                     Icon(HugeIcons.Copy01, stringResource(R.string.copy), modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            val synchronizationFailure = state?.synchronization?.failure
+                            Text(stringResource(if (synchronizationFailure != null)
+                                R.string.enterprise_configuration_attention else phaseText(state?.phase)),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (synchronizationFailure != null) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.primary)
+                            if (state?.generation != null) {
+                                Text(stringResource(R.string.enterprise_configuration_last_sync) + "  " +
+                                    (state?.lastSyncMillis?.let { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, currentLocale()).format(Date(it)) }
+                                        ?: stringResource(R.string.enterprise_configuration_not_available)),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!inEnterprise && state?.canEnterEnterprise == true) {
+                                Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(stringResource(R.string.enterprise_switch_enterprise))
+                                }
+                            }
+                            Button(onClick = vm::synchronize,
+                                enabled = !busy && state?.synchronization?.syncing != true && state?.canEnterEnterprise == true,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                Icon(HugeIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.enterprise_sync))
+                            }
+                            if (configurationDetails != null) {
+                                TextButton(onClick = { configurationDetailsOpen = true }, enabled = !busy) {
+                                    Text(stringResource(R.string.enterprise_configuration_details_open))
+                                }
+                            }
+                        }
+                        if (state?.phase == EnterpriseSessionPhase.CONFIGURATION_PENDING && state?.synchronization?.failure == null) {
+                            Text(stringResource(R.string.enterprise_pending_next_step), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        state?.synchronization?.failure?.let { EnterpriseSynchronizationNotice(it) }
+                        val localWorkspace by vm.workspaceSummary.collectAsStateWithLifecycle()
+                        val workspaceFailure by vm.workspaceFailure.collectAsStateWithLifecycle()
+                        (workspaceFailure?.takeIf { inEnterprise }?.detail ?: workspaceQuery
+                            ?.takeIf { inEnterprise && it.selection == state?.selection && localWorkspace == null }?.diagnostic)?.let { detail ->
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.remote_workspace_query_failed),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail,
+                                        modifier = Modifier.defaultMinSize(minWidth = 1.dp), contentPadding = PaddingValues(0.dp))
+                                    TextButton(onClick = vm::refreshWorkspace, contentPadding = PaddingValues(0.dp),
+                                        modifier = Modifier.defaultMinSize(minWidth = 1.dp)) {
+                                        Text(stringResource(R.string.application_recovery_retry))
+                                    }
                                 }
                             }
                         }
@@ -698,7 +708,8 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                     R.string.enterprise_updates_refresh_failed_stale else R.string.enterprise_updates_refresh_failed),
                                     color = MaterialTheme.colorScheme.error,
                                     style = MaterialTheme.typography.bodySmall)
-                                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
+                                net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail,
+                                    modifier = Modifier.defaultMinSize(minWidth = 1.dp), contentPadding = PaddingValues(0.dp))
                             }
                             recent.value?.let { feed ->
                                 feed.items.forEachIndexed { index, item ->

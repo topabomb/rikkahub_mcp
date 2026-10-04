@@ -304,7 +304,7 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(text(R.string.enterprise_budget_near_limit)).assertIsDisplayed()
         capturePage("enterprise-usage.png")
         compose.onNodeWithContentDescription(text(R.string.back)).performClick()
-        compose.onNodeWithTag("enterprise-connection-menu").assertIsDisplayed()
+        compose.onNodeWithTag("enterprise-page-menu").assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertDoesNotExist()
         compose.onNodeWithTag("enterprise-page-menu").performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
@@ -363,7 +363,7 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun connectedCardEditsTheAddressWithoutStartingEnrollment() {
+    fun pageMenuEditsTheAddressWithoutStartingEnrollment() {
         val oldOrigin = "https://old.example"
         val newOrigin = "https://new.example"
         val initial = overview().copy(platformOrigin = oldOrigin)
@@ -372,9 +372,11 @@ class EnterprisePageAndroidTest {
         coEvery { fixture.service.changeAddress(request, newOrigin) } just Runs
         fixture.show()
 
-        compose.onNodeWithTag("enterprise-connection-menu").performClick()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        capturePage("enterprise-management-menu.png")
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
+        capturePage("enterprise-address-editor.png")
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
         compose.onNode(hasText(text(R.string.confirm)) and hasClickAction()).performClick()
         compose.waitUntil(5_000) { !fixture.vm.busy.value }
@@ -385,7 +387,7 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun connectedCardEditsTheAddressWhilePersonalSpaceIsSelected() {
+    fun pageMenuEditsTheAddressWhilePersonalSpaceIsSelected() {
         val oldOrigin = "https://old.example"
         val newOrigin = "https://new.example"
         val enterpriseAccess = access()
@@ -400,7 +402,8 @@ class EnterprisePageAndroidTest {
         fixture.show()
         capturePage("enterprise-personal-space.png")
 
-        compose.onNodeWithTag("enterprise-connection-menu").performClick()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        capturePage("enterprise-personal-management-menu.png")
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_address_edit_title)).assertIsDisplayed()
         compose.onNode(hasSetTextAction()).performTextReplacement(newOrigin)
@@ -740,11 +743,12 @@ class EnterprisePageAndroidTest {
         }
         try {
             fixture.show()
-            compose.onNodeWithTag("enterprise-connection-menu").performClick()
+            compose.onNodeWithTag("enterprise-page-menu").performClick()
             compose.onNodeWithText(text(R.string.enterprise_exit)).performClick()
             compose.waitUntil(5_000) { fixture.vm.exitRequest.value != null }
             val confirmation = text(R.string.enterprise_exit_confirm, "Original enterprise")
             compose.onNodeWithText(confirmation).assertIsDisplayed()
+            capturePage("enterprise-exit-confirmation.png")
             coVerify(exactly = 0) { fixture.service.exit(any()) }
 
             val replacement = overview(access = access("replacement-session"), name = "Replacement enterprise", revision = 7L)

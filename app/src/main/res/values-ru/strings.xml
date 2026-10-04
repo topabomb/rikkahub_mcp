@@ -2073,7 +2073,6 @@
   <string name="chat_deleted_continuation_failed">Чат удалён, но новый чат открыть не удалось. Перейдите в пространства.</string>
   <string name="enterprise_refresh_status">Обновить состояние</string>
   <string name="enterprise_all_chat_history">Вся история чатов</string>
-  <string name="enterprise_applied_version_summary">Применённая версия %1$d</string>
   <string name="remote_workspace_query_failed">Не удалось определить состояние удалённого рабочего пространства</string>
   <string name="enterprise_publication_release">ID публикации</string>
   <string name="enterprise_publication_hash">SHA-256 конфигурации</string>

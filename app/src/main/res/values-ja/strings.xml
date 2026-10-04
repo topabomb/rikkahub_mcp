@@ -2073,7 +2073,6 @@
   <string name="chat_deleted_continuation_failed">会話は削除されましたが、新しいチャットを開けませんでした。スペースから続けてください。</string>
   <string name="enterprise_refresh_status">状態を更新</string>
   <string name="enterprise_all_chat_history">すべてのチャット履歴</string>
-  <string name="enterprise_applied_version_summary">現在適用中のバージョン %1$d</string>
   <string name="remote_workspace_query_failed">リモートワークスペースの状態を確認できません</string>
   <string name="enterprise_publication_release">リリース ID</string>
   <string name="enterprise_publication_hash">設定 SHA-256</string>

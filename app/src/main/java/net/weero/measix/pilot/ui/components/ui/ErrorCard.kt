@@ -172,9 +172,10 @@ fun DiagnosticDisclosure(
     label: String = stringResource(R.string.chat_conversation_diagnostics),
     modifier: Modifier = Modifier,
     title: String? = null,
+    contentPadding: PaddingValues = ButtonDefaults.TextButtonContentPadding,
 ) {
     var open by remember(detail) { mutableStateOf(false) }
-    TextButton(onClick = { open = true }, modifier = modifier) { Text(label) }
+    TextButton(onClick = { open = true }, modifier = modifier, contentPadding = contentPadding) { Text(label) }
     if (open) ErrorDetails(ChatError(title = title, detail = detail), onDismiss = { open = false })
 }
 

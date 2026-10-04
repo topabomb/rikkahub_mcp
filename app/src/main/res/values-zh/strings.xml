@@ -2073,7 +2073,6 @@
   <string name="chat_deleted_continuation_failed">会话已删除，但未能打开新聊天。请到空间继续。</string>
   <string name="enterprise_refresh_status">刷新状态</string>
   <string name="enterprise_all_chat_history">全部聊天历史</string>
-  <string name="enterprise_applied_version_summary">当前生效版本 %1$d</string>
   <string name="remote_workspace_query_failed">未能确认远程工作区状态</string>
   <string name="enterprise_publication_release">发布 ID</string>
   <string name="enterprise_publication_hash">配置 SHA-256</string>
