@@ -173,6 +173,29 @@ class FileManagementServicesTest {
         } finally { owner.cancel(); first.file.delete() }
     }
 
+    @Test fun `inspection preview uses bounded authenticated LAN reads and rejects late page results`() = runTest {
+        val fetcher = mockk<net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher>()
+        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() },
+            sessions, remoteMediaFetcher = fetcher)
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selection.access, selection.revision) {}
+        val url = "http://user:pass@192.168.1.2/image.png"
+        val source = requireNotNull(service.externalImageSource(view, url, true))
+        assertTrue(source != service.externalImageSource(view, url))
+        val bytes = net.weero.measix.pilot.data.imggen.TINY_PNG
+        coEvery { fetcher.fetch(url, true) } returns
+            net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Success(bytes, "image/png", "image.png")
+        assertTrue(source.readBytes().contentEquals(bytes))
+        coEvery { fetcher.fetch(url, true) } returns
+            net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Failure("attachment_fetch_failed", "HTTP 401: authentication required")
+        assertTrue(runCatching { source.readBytes() }.exceptionOrNull()?.message.orEmpty().contains("HTTP 401"))
+        coEvery { fetcher.fetch(url, true) } coAnswers {
+            view.close()
+            net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Success(bytes, "image/png", "image.png")
+        }
+        assertEquals("conversation_view_closed", runCatching { source.readBytes() }.exceptionOrNull()?.message)
+        coVerify(exactly = 3) { fetcher.fetch(url, true) }
+    }
+
     @Test fun `closing the original page during image work rejects the result`() = runTest {
         for (checkOnly in listOf(true, false)) {
             val artifacts = mockk<ArtifactStore>()

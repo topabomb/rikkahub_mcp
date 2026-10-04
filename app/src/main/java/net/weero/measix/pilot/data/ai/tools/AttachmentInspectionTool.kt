@@ -67,9 +67,7 @@ internal fun createAttachmentInspectionTool(
 
     return Tool(
         name = ATTACHMENT_INSPECTION_TOOL_NAME,
-        description = "Inspect attachment content on demand when the task depends on it — " +
-            "for example, text or other visual details in an image. " +
-            "Returns the findings for the request.",
+        description = "Inspect attachment content and return the requested information.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -83,7 +81,7 @@ internal fun createAttachmentInspectionTool(
                                     put("type", "string")
                                     put(
                                         "description",
-                                        "Exact /upload/<file> path or HTTP(S) attachment URL. Currently supports images. Basic authentication may be supplied as http(s)://username:password@host/path (percent-encode reserved characters). Use an image file, not a directory; never guess a local path.",
+                                        "An existing /upload/<file> path or an HTTP(S) file URL. For Basic authentication, use http(s)://username:password@host/path. Percent-encode reserved characters within the username and password.",
                                     )
                                 },
                             )
@@ -91,10 +89,7 @@ internal fun createAttachmentInspectionTool(
                             put("maxItems", MAX_INSPECTION_ATTACHMENTS)
                             put(
                                 "description",
-                                "Attachment URLs or file paths from the user's request, [Attachment path=...] markers, " +
-                                    "tool result file.path, or artifacts[].path. " +
-                                    "Files need not have appeared as images in this chat. " +
-                                    "Up to 4; order is preserved. Does not require a workspace.",
+                                "Attachments to inspect, in order. Currently supports images.",
                             )
                         },
                     )
@@ -104,10 +99,7 @@ internal fun createAttachmentInspectionTool(
                             put("type", "string")
                             put(
                                 "description",
-                                "The specific information needed and its expected form: exact text to " +
-                                    "transcribe, details to compare across images, or facts to verify. " +
-                                    "Prefer precise requests over vague descriptions. " +
-                                    "Keep it focused on the current task.",
+                                "What to extract, compare, or verify, and the desired output format.",
                             )
                         },
                     )

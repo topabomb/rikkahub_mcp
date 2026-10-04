@@ -83,6 +83,23 @@ class ConversationAttachmentPreviewProjectorTest {
         assertTrue(ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(listOf(message))).isEmpty())
     }
 
+    @Test fun `inspection URLs receive lazy page scoped previews without treating delegation URLs as attachments`() = runTest {
+        val store = mockk<ArtifactStore>()
+        val files = imageFiles()
+        val url = "http://user:pass@192.168.1.2/image.png"
+        for (name in listOf("inspect_attachments", "assistant_call")) {
+            val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
+                localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "remote", toolName = name,
+                input = """{"attachments":["  $url  "]}""")) +
+                if (name == "inspect_attachments") listOf(UIMessagePart.Image(url)) else emptyList())
+            val result = ConversationAttachmentPreviewProjector(store, files).projectUrls(snapshotOf(listOf(message)))
+            assertEquals(if (name == "inspect_attachments") mapOf(url to url) else emptyMap<String, String>(), result)
+        }
+        io.mockk.verify(exactly = 1) { files.externalImageSource(any<ConversationViewLease>(), url, true) }
+        io.mockk.verify(exactly = 0) { files.externalImageSource(any<ConversationViewLease>(), url, false) }
+        coVerify(exactly = 0) { store.resolveToolPath(any()) }
+    }
+
     @Test
     fun `preview does not interpret unrelated tool inputs or unsafe paths`() = runTest {
         val store = mockk<ArtifactStore>()
@@ -92,7 +109,7 @@ class ConversationAttachmentPreviewProjectorTest {
             ))),
             UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
                 localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "bad", toolName = "inspect_attachments",
-                input = """{"attachments":["/upload/../private.png","attachment:123","https://example.com/a.png"]}""",
+                input = """{"attachments":["/upload/../private.png","attachment:123","ftp://example.com/a.png"]}""",
             ))),
         )
         assertTrue(ConversationAttachmentPreviewProjector(store, imageFiles()).projectUrls(snapshotOf(messages)).isEmpty())
@@ -603,9 +620,9 @@ class ConversationAttachmentPreviewProjectorTest {
     }
 
     private fun imageFiles(): FileManagementApplicationService = mockk(relaxed = true) {
-        every { externalImageSource(any<ConversationViewLease>(), any()) } answers {
+        every { externalImageSource(any<ConversationViewLease>(), any(), any()) } answers {
             val url = secondArg<String>()
-            if (url.startsWith("https://") || url.startsWith("data:image/"))
+            if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/"))
                 ImageSource(url, ImageOrigin.NETWORK, verifyAccess = {}, readPayload = { byteArrayOf() })
             else null
         }

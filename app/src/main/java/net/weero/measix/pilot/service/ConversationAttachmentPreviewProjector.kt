@@ -128,7 +128,15 @@ class ConversationAttachmentPreviewProjector(
                 val primitive = value as? JsonPrimitive ?: continue
                 if (!primitive.isString) continue
                 val path = primitive.content.trim()
-                if (LocalToolPath.parseUploadToolPath(path) == null || path in projected) continue
+                if (path in projected) continue
+                if (tool.toolName == "inspect_attachments" &&
+                    net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher.parseHttpUrl(path) != null) {
+                    files.externalImageSource(source, path, allowLocalNetwork = true)?.let {
+                        projected[path] = AttachmentPreview(path, it)
+                    }
+                    continue
+                }
+                if (LocalToolPath.parseUploadToolPath(path) == null) continue
                 try {
                     val file = artifactStore.resolveToolPath(path) ?: continue
                     artifactStore.resolveImagePreviewForFile(scope, file, source.ownedArtifact(file))?.let {
@@ -145,7 +153,7 @@ class ConversationAttachmentPreviewProjector(
         }
         AttachmentRefs.walkMessageParts(messages).filterIsInstance<UIMessagePart.Image>().forEach { image ->
             val stable = AttachmentRefs.getStableRef(image)?.let(projected::get)
-            val preview = stable ?: files.externalImageSource(source, image.url)?.let { AttachmentPreview(image.url, it) }
+            val preview = stable ?: projected[image.url] ?: files.externalImageSource(source, image.url)?.let { AttachmentPreview(image.url, it) }
             if (preview != null) projected[image.url] = preview
         }
         return projected

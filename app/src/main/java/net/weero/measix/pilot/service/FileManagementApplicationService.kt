@@ -203,8 +203,8 @@ class FileManagementApplicationService internal constructor(
 
     fun externalImageSource(url: String): ImageSource? = externalImageSource(url, "shared") { }
 
-    internal fun externalImageSource(view: ConversationViewLease, url: String): ImageSource? =
-        externalImageSource(url, "conversation:${view.imageReadIdentity}") { requireImagePage(view) }
+    internal fun externalImageSource(view: ConversationViewLease, url: String, allowLocalNetwork: Boolean = false): ImageSource? =
+        externalImageSource(url, "conversation:${view.imageReadIdentity}", allowLocalNetwork) { requireImagePage(view) }
 
     private suspend fun requireImagePage(view: ConversationViewLease) {
         recoveryGate.awaitReady()
@@ -227,7 +227,7 @@ class FileManagementApplicationService internal constructor(
         return preview?.let { conversationImageSource(view, it.artifactId, it.displayName, it.modifiedAtMillis) }
     }
 
-    private fun externalImageSource(url: String, contextIdentity: String, verify: suspend () -> Unit): ImageSource? {
+    private fun externalImageSource(url: String, contextIdentity: String, allowLocalNetwork: Boolean = false, verify: suspend () -> Unit): ImageSource? {
         val inline = url.startsWith("data:image/", ignoreCase = true)
         if (!inline && !url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://", ignoreCase = true)) return null
         val inlinePayload = if (inline) url.substringAfter(',', "").also { payload ->
@@ -235,7 +235,7 @@ class FileManagementApplicationService internal constructor(
                 payload.length <= GeneratedMediaStore.MAX_IMAGE_BYTES * 4 / 3 + 16) { "image_payload_invalid" }
         } else null
         return ImageSource(
-            cacheIdentity = "$contextIdentity:external:$url",
+            cacheIdentity = "$contextIdentity:external:$allowLocalNetwork:$url",
             origin = if (inline) ImageOrigin.INLINE else ImageOrigin.NETWORK,
             displayName = if (inline) null else url.substringBefore('?').substringAfterLast('/').takeIf { it.isNotBlank() },
             verifyAccess = verify,
@@ -243,9 +243,9 @@ class FileManagementApplicationService internal constructor(
                 verify()
                 val bytes = if (inline) {
                     java.util.Base64.getDecoder().decode(requireNotNull(inlinePayload))
-                } else when (val result = remoteMediaFetcher.fetch(url)) {
+                } else when (val result = remoteMediaFetcher.fetch(url, allowLocalNetwork)) {
                     is net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Success -> result.bytes
-                    is net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Failure -> error(result.reason)
+                    is net.weero.measix.pilot.data.ai.attachments.RemoteMediaFetchResult.Failure -> error(listOfNotNull(result.reason, result.detail).joinToString(": "))
                 }
                 require(bytes.size <= GeneratedMediaStore.MAX_IMAGE_BYTES && net.weero.measix.pilot.data.ai.attachments.ImageMime.isAcceptedImage(bytes)) { "image_payload_invalid" }
                 verify()

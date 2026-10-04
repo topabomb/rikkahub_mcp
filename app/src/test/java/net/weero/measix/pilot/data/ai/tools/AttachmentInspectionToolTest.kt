@@ -201,16 +201,14 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `schema describes file paths from every disclosure source without internal identifiers`() {
+    fun `schema describes supported attachment references and authentication`() {
         val settings = settingsFor(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
         val tool = createAttachmentInspectionTool(capturedModel(requireNotNull(settings.findModelById(settings.attachmentInspectionModelId)), settings.providers.single()), providerManager)
         val parameters = tool.parameters().toString()
         assertTrue(parameters.contains("/upload/<file>"))
-        assertTrue(parameters.contains("[Attachment path=...]"))
-        assertTrue(parameters.contains("file.path"))
-        assertTrue(parameters.contains("artifacts[].path"))
-        assertTrue(parameters.contains("Does not require a workspace"))
+        assertTrue(parameters.contains("HTTP(S)"))
+        assertTrue(parameters.contains("Basic authentication"))
         assertFalse(parameters.contains("attachment:<uuid>"))
         assertFalse(parameters.contains("Attachment ref="))
     }

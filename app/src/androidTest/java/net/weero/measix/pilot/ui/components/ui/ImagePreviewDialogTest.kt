@@ -258,6 +258,73 @@ class ImagePreviewDialogTest {
             }
     }
 
+    @Test fun authenticatedInspectionThumbnailLoadsAndOpensSharedViewer() = kotlinx.coroutines.runBlocking<Unit> {
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
+        val bytes = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); bitmap.recycle(); output.toByteArray()
+        }
+        val address = java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .flatMap { it.inetAddresses.toList() }.first { it is java.net.Inet4Address && it.isSiteLocalAddress }.hostAddress
+        val server = java.net.ServerSocket(0)
+        val credentials = okhttp3.Credentials.basic("user", "pass")
+        val authorizedRequests = java.util.concurrent.atomic.AtomicInteger()
+        val worker = kotlin.concurrent.thread(isDaemon = true) {
+            try {
+                while (!server.isClosed) server.accept().use { socket ->
+                    socket.soTimeout = 5000
+                    val reader = socket.getInputStream().bufferedReader()
+                    val headers = generateSequence { reader.readLine()?.takeIf { it.isNotEmpty() } }.toList()
+                    val authorized = headers.any { it.equals("Authorization: $credentials", ignoreCase = true) }
+                    if (authorized) authorizedRequests.incrementAndGet()
+                    socket.getOutputStream().apply {
+                        write((if (authorized) "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
+                        else "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
+                        if (authorized) write(bytes)
+                        flush()
+                    }
+                }
+            } catch (error: java.net.SocketException) { if (!server.isClosed) throw error }
+        }
+        val sessions = io.mockk.mockk<net.weero.measix.pilot.data.enterprise.EnterpriseSessionController>()
+        io.mockk.coEvery { sessions.withSelectedRealmSelection<Unit>(any(), any()) } coAnswers {
+            secondArg<suspend () -> Unit>()()
+        }
+        val files = net.weero.measix.pilot.service.FileManagementApplicationService(io.mockk.mockk(), io.mockk.mockk(),
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }, sessions)
+        val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0) {}
+        val url = "http://user:pass@$address:${server.localPort}/test.png"
+        val image = requireNotNull(files.externalImageSource(view, url, allowLocalNetwork = true))
+        val arguments = kotlinx.serialization.json.buildJsonObject {
+            put("attachments", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(url))))
+            put("request", kotlinx.serialization.json.JsonPrimitive("Read the image"))
+        }
+        val tool = me.rerere.ai.ui.UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(),
+            providerCallId = "image", toolName = "inspect_attachments", input = arguments.toString())
+        val context = net.weero.measix.pilot.ui.components.message.tools.ToolUIContext(tool, arguments, true, null,
+            net.weero.measix.pilot.service.runtime.ToolLivePhase.COMPLETED)
+        try {
+            compose.setContent { MaterialTheme {
+                CompositionLocalProvider(net.weero.measix.pilot.ui.components.message.LocalAttachmentPreview provides
+                    { ref -> if (ref == url) net.weero.measix.pilot.service.AttachmentPreview(url, image) else null }) {
+                    net.weero.measix.pilot.ui.components.message.tools.AttachmentInspectionToolUI.Summary(context)
+                }
+            } }
+            val thumbnail = compose.onNode(androidx.compose.ui.test.hasClickAction())
+            compose.waitUntil(10_000) {
+                val pixels = thumbnail.captureToImage().toPixelMap()
+                val center = pixels[pixels.width / 2, pixels.height / 2]
+                center.red > .9f && center.green < .1f
+            }
+            assertTrue(authorizedRequests.get() > 0)
+            captureEvidence("inspection-http-thumbnail")
+            thumbnail.performClick()
+            compose.onNodeWithText("test.png").assertIsDisplayed()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_close_content_description))
+                .assertIsDisplayed().performClick()
+        } finally { view.close(); server.close(); worker.join(5000) }
+    }
+
     @Test fun validatedSvgRendersThroughTheSharedImageSourceAndDecoder() {
         val bytes = """<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300">
             <rect width="900" height="300" fill="red"/></svg>""".toByteArray()

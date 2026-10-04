@@ -129,6 +129,7 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 
 `ConversationAttachmentPreviewProjector` 从持久节点和当前活动 Assistant 重建预览 map，
 并为 `inspect_attachments` / `assistant_call` 顶层 `attachments` 中的合法路径补充预览。
+`inspect_attachments` 的 HTTP(S) 输入另投影为页面绑定的网络 `ImageSource`，缩略图和大图复用现有查看器；按需读取时使用与识别相同的 Basic、LAN 和大小限制，不新增持久附件或临时文件。
 UI 只查询该 map，不扫描 metadata；map 不是持久引用或读取授权，`file:` 资源没有有效投影时不能回退原路径。
 Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入参路径，不改其他字段或正文，不建立旧路径别名。
 
