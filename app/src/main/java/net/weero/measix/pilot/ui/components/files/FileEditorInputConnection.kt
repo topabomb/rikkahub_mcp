@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.files
 
 import android.graphics.RectF
 import android.view.inputmethod.ExtractedText

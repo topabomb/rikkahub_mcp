@@ -2,10 +2,25 @@ package me.rerere.workspace
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.nio.file.Files
 
 class WorkspaceFileSystemTest {
+    @Test fun textReadsPreserveLiteralBytesAndRejectBinaryOrInvalidUtf8() {
+        val root = Files.createTempDirectory("workspace-text").toFile()
+        try {
+            val files = WorkspaceFileSystem()
+            val original = "\uFEFF<html>中文 {{literal}}</html>\r\n\r\n"
+            root.resolve("page.html").writeBytes(original.toByteArray())
+            assertEquals(original, files.readText(root, "page.html"))
+            root.resolve("binary").writeBytes(byteArrayOf(65, 0, 66))
+            root.resolve("invalid.json").writeBytes(byteArrayOf(0xc3.toByte(), 0x28))
+            assertThrows(IllegalArgumentException::class.java) { files.readText(root, "binary") }
+            assertThrows(java.nio.charset.CharacterCodingException::class.java) { files.readText(root, "invalid.json") }
+            assertEquals(original, root.resolve("page.html").readText())
+        } finally { root.deleteRecursively() }
+    }
     @Test fun statDoesNotDependOnDirectoryPageAndRejectsEscapes() {
         val root = Files.createTempDirectory("workspace-stat").toFile()
         try {

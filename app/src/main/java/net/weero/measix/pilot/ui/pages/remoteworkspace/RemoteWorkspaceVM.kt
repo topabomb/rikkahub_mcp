@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.*
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.WorkspaceFileRules
 import net.weero.measix.pilot.service.remoteworkspace.*
-import net.weero.measix.pilot.ui.components.ui.FileEditorState
+import net.weero.measix.pilot.ui.components.files.FileEditorState
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 internal data class RemoteSaveSubmission(

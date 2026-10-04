@@ -14,7 +14,7 @@ fun AnnotatedString.Builder.buildHighlightText(
     when (token) {
         is HighlightToken.Plain -> append(token.content)
         is HighlightToken.Styled -> {
-            withStyle(getStyleForTokenType(token.type, colors)) {
+            withStyle(highlightTokenStyle(token.type, colors)) {
                 append(token.content)
             }
         }
@@ -66,7 +66,7 @@ data class HighlightTextColorPalette(
  * `char.escape`. An unknown tier falls back to its parent scope, which is what the upstream CSS
  * themes do by emitting one class per tier.
  */
-private fun getStyleForTokenType(
+fun highlightTokenStyle(
     type: String,
     colors: HighlightTextColorPalette,
 ): SpanStyle {

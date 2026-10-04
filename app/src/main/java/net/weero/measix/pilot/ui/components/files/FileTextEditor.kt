@@ -1,4 +1,4 @@
-package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.files
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -9,6 +9,7 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextWatcher
 import android.text.InputType
+import android.text.style.ForegroundColorSpan
 import android.text.method.ArrowKeyMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
@@ -28,15 +29,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
+import me.rerere.highlight.HighlightTextColorPalette
+import me.rerere.highlight.HighlightToken
+import me.rerere.highlight.CodeHighlighter
+import me.rerere.highlight.highlightTokenStyle
+import net.weero.measix.pilot.ui.theme.LocalDarkMode
+import net.weero.measix.pilot.ui.theme.AtomOneDarkPalette
+import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
 
-/** Composition-local draft; the native editor and this state share the same editable buffer. */
+/** In-memory draft; the native editor and this state share the same editable buffer. */
 @Stable
 class FileEditorState(initialText: String = "") {
     internal val editable = SpannableStringBuilder(initialText)
@@ -72,6 +88,7 @@ fun FileTextEditor(
     placeholder: String? = null,
     supportingText: (@Composable () -> Unit)? = null,
     isError: Boolean = false,
+    fileName: String? = null,
 ) {
     require(minLines >= 1 && maxLines >= minLines)
     val colors = MaterialTheme.colorScheme
@@ -79,6 +96,31 @@ fun FileTextEditor(
     val foreground = colors.onSurface.copy(alpha = if (enabled) 1f else .38f)
     val hintColor = colors.onSurfaceVariant.copy(alpha = if (enabled) 1f else .38f)
     val textSizePx = with(LocalDensity.current) { MaterialTheme.typography.bodySmall.fontSize.toPx() }
+    val language = remember(fileName) { fileName?.let(::fileTextFormat)?.language }
+    // The parser caches mutable matchers. Each source/language owns its worker instance so
+    // cancelled work cannot race a new language or the synchronous message renderer.
+    val highlighter = remember(state, language) { language?.let { CodeHighlighter() } }
+    val palette = if (LocalDarkMode.current) AtomOneDarkPalette else AtomOneLightPalette
+    var highlight by remember(state, language) { mutableStateOf<FileSyntaxHighlight?>(null) }
+    LaunchedEffect(state, language, highlighter) {
+        snapshotFlow { state.revision }.collectLatest { revision ->
+            highlight = null
+            if (language != null && highlighter != null && state.editable.length <= MAX_HIGHLIGHT_CHARACTERS) {
+                // One serial calculation: quick input cancels the delay or waits for the bounded
+                // previous parse to exit. Native text is only read on Main, never on the worker.
+                delay(120)
+                if (state.revision != revision || state.editable.length > MAX_HIGHLIGHT_CHARACTERS) {
+                    return@collectLatest
+                }
+                val source = state.snapshot()
+                val tokens = withContext(Dispatchers.Default) { highlighter.highlight(source, language) }
+                if (state.revision == revision &&
+                    tokens.count { it is HighlightToken.Styled } <= MAX_HIGHLIGHT_SPANS) {
+                    highlight = FileSyntaxHighlight(revision, tokens)
+                }
+            }
+        }
+    }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Column(
@@ -95,19 +137,22 @@ fun FileTextEditor(
             key(state) {
                 AndroidView(
                     factory = { context -> FileEditText(context, state) },
+                    onRelease = { view -> view.clearSyntaxHighlight() },
                     modifier = Modifier.fillMaxWidth().then(
                         if (fillViewport) Modifier.weight(1f).fillMaxSize() else Modifier
                     ),
                     update = { view ->
                         view.isEnabled = enabled
                         view.updateReadOnly(readOnly)
-                        view.minLines = minLines
-                        view.maxLines = maxLines
+                        view.minLines = if (fillViewport) 1 else minLines
+                        view.maxLines = if (fillViewport) Int.MAX_VALUE else maxLines
                         view.hint = placeholder
                         view.contentDescription = label
                         view.setTextColor(foreground.toArgb())
                         view.setHintTextColor(hintColor.toArgb())
                         view.setTextSize(TypedValue.COMPLEX_UNIT_PX, textSizePx)
+                        view.updateSyntaxHighlight(
+                            highlight?.takeIf { enabled && it.revision == state.revision }, palette)
                     },
                 )
             }
@@ -116,12 +161,14 @@ fun FileTextEditor(
     }
 }
 
-// Compose owns styling; plain file editing keeps the platform buffer and input protocol without
+// Compose owns styling; file editing keeps the platform buffer and input protocol without
 // AppCompat's emoji/content adapters. FileEditorInputConnection bounds the platform IME queries.
 @SuppressLint("AppCompatCustomView")
 internal class FileEditText(context: Context, state: FileEditorState) : EditText(context) {
     private val editingKeyListener: android.text.method.KeyListener
     private var currentReadOnly = false
+    private var syntaxHighlight: FileSyntaxHighlight? = null
+    private var syntaxPalette: HighlightTextColorPalette? = null
 
     init {
         isSaveEnabled = false
@@ -156,6 +203,31 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
         isCursorVisible = !readOnly
     }
 
+    internal fun updateSyntaxHighlight(highlight: FileSyntaxHighlight?, palette: HighlightTextColorPalette) {
+        if (syntaxHighlight === highlight && syntaxPalette == palette) return
+        clearSyntaxHighlight()
+        syntaxHighlight = highlight
+        syntaxPalette = palette
+        var offset = 0
+        highlight?.tokens?.forEach { token ->
+            val end = offset + token.content.length
+            if (token is HighlightToken.Styled && end > offset) {
+                text.setSpan(
+                    FileSyntaxColorSpan(highlightTokenStyle(token.type, palette).color.toArgb()),
+                    offset, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            offset = end
+        }
+    }
+
+    internal fun clearSyntaxHighlight() {
+        // Only our draw spans are removed. Selection, IME composing spans and the buffer watcher
+        // retain their native ownership; colours never create a text revision or affect saving.
+        text.getSpans(0, text.length, FileSyntaxColorSpan::class.java).forEach(text::removeSpan)
+        syntaxHighlight = null
+        syntaxPalette = null
+    }
+
     // Selectable/read-only mode normally changes the buffer type. Keep the same Editable owner.
     override fun setText(text: CharSequence?, type: BufferType?) {
         super.setText(text, BufferType.EDITABLE)
@@ -168,3 +240,10 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
         return FileEditorInputConnection(connection)
     }
 }
+
+internal data class FileSyntaxHighlight(val revision: Int, val tokens: List<HighlightToken>)
+internal class FileSyntaxColorSpan(color: Int) : ForegroundColorSpan(color), NoCopySpan
+
+// Parsing and applying spans are bounded independently of the full editable document.
+internal const val MAX_HIGHLIGHT_CHARACTERS = 128 * 1024
+private const val MAX_HIGHLIGHT_SPANS = 10_000

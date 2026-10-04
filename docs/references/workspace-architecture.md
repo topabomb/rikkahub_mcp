@@ -84,6 +84,8 @@ Rootfs 内的主要映射：
 
 `WorkspaceDetailVM` 在恢复前台时刷新当前目录，避免外部修改后沿用旧大小和修改时间。文件图片通过 `WorkspaceApplicationService.imageSource` 绑定 workspace/area/entry，直接 stat 复验修订和实际字节上限，不依赖有数量上限的目录列表，不另建预览副本或缓存 owner。
 
+本地 `WorkspaceFileSystem.readText` 和 Linux 区预览通过 `decodeWorkspaceText` 严格解码，拒绝非法编码和 NUL，
+保留原 BOM、换行及字面正文，避免把二进制或替换字符当作可保存的源码。
 本地编辑正文由以 id/area/path 为键的 `FileEditorState` 持有，保存走 `WorkspaceApplicationService.writeText`，成功后更新原正文基线。未保存退出需确认，保存期间禁止退出；失败保留正文和诊断，取消恢复操作状态。该草稿不进入 Bundle 或 durable store，Activity/进程重建重新读取已发布文件。共享正文视口和输入法规则见 [UI 架构](ui-architecture.md)。
 
 ## 4. PRoot 执行契约
@@ -300,7 +302,8 @@ Nav3 的 `clazzContentKey`，窗口或 Activity 重建复用原 VM、FileEditorS
 恢复后的刷新仍使用 VM 捕获的原 selection。关闭或撤权清除；替换 Session 不复活旧授权，UNKNOWN 写入不重放。
 进程死亡没有原 VM，导航 key 不恢复临时 selection，文件页要求显式返回重开；不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有名和安全短扩展名，
 FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实副本类型与接收应用看到的类型不一致。
-图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 交给外部应用。`RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 预览及外部图片，
+图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 可作为文本源码预览和编辑，外部打开仍是显式动作。
+`RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 渲染预览及外部图片，
 相对图片仍经原 handle 授权读取；不会向富文本渲染器暴露 Bearer URL。
 `WorkspaceFileRules.relativeImage` 只在 Markdown URL 边界严格解码一次百分编码，支持编码的空格和中文，
 保持字面加号；非法转义、非法 UTF-8、编码路径别名及越根引用仍拒绝。HTTP 调用始终传逻辑路径，由 URL builder 编码。
@@ -313,7 +316,9 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 
 列表摘要显示可见项目数，以及目录响应提供的可选 `usedBytes/availableBytes`。它们是 DAV 对当前目录报告的容量，缺失时省略；不从文件大小求和或推算企业总配额。Android 不调用 Core Admin 的资源采样接口。
 
-预览与编辑使用共享文件正文组件，布局和动作可达性见 [UI 架构](ui-architecture.md)。不支持格式时显示元信息、下载和外部打开；读取失败显示原诊断与刷新，不能冒充格式不支持。图片信息沿原 `ImageSource` 授权，失败可重试；PDF 逐页缩放/平移，翻页释放旧 bitmap 并重建缩放状态，首尾禁用对应动作。加载失败回收本次副本，刷新复验原状态与句柄；缩放不提高渲染分辨率或资源上限。
+预览与编辑使用共享文件正文组件和文本类型识别，布局、代码高亮与动作可达性见 [UI 架构](ui-architecture.md)。
+远程仍沿 `WorkspaceText` 的 BOM/换行与 ETag 协议。
+不支持格式时显示元信息、下载和外部打开；读取失败显示原诊断与刷新，不能冒充格式不支持。图片信息沿原 `ImageSource` 授权，失败可重试；PDF 逐页缩放/平移，翻页释放旧 bitmap 并重建缩放状态，首尾禁用对应动作。加载失败回收本次副本，刷新复验原状态与句柄；缩放不提高渲染分辨率或资源上限。
 
 ## 11. 维护与验证
 

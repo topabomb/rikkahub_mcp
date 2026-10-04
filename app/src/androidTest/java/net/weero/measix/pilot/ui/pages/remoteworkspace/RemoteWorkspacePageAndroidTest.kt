@@ -2,10 +2,14 @@ package net.weero.measix.pilot.ui.pages.remoteworkspace
 
 import android.widget.EditText
 import android.content.ContentValues
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.*
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.getOrNull
@@ -51,6 +55,68 @@ class RemoteWorkspacePageAndroidTest {
     private val file = RemoteFile("notes.txt", false, 8, null, "\"v1\"")
     private val document = RemoteTextDocument(file, WorkspaceText("original", false, "\n"))
 
+    @Test fun commonCodeFilesUseSourcePreviewAndExplicitEditingWithFullBody() {
+        val f = Fixture()
+        val bodies = linkedMapOf(
+            "page.html" to (1..100).joinToString("\n") { "<div class=\"item\">正文 $it {{literal}}</div>" },
+            "config.xml" to (1..100).joinToString("\n") { "<item value=\"$it\">正文</item>" },
+            "data.json" to "[\n" + (1..180).joinToString(",\n") { "  {\"id\": $it, \"content\": \"literal {{text}} 中文\"}" } + "\n]",
+            "server.py" to "\"\"\"description\nimport literal text\n\"\"\"\n" + (1..100).joinToString("\n") { "value_$it = $it  # 中文" },
+        )
+        val files = bodies.map { (name, body) -> RemoteFile(name, false, body.toByteArray().size.toLong(), null, "\"v1\"") }
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", files, null, null)
+        coEvery { f.service.readText(f.handle, any()) } answers {
+            val current = secondArg<RemoteFile>()
+            RemoteTextDocument(current, WorkspaceText(bodies.getValue(current.name), false, "\n"))
+        }
+        f.show()
+        files.forEach { current ->
+            compose.onNodeWithText(current.name).performClick()
+            var native: EditText? = null
+            onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+                if (error != null) throw error
+                native = view as EditText
+                assertNull(native!!.keyListener)
+                assertEquals(bodies.getValue(current.name), native!!.text.toString())
+            }
+            compose.waitUntil(5_000) {
+                var coloured = false
+                compose.runOnUiThread {
+                    val editor = requireNotNull(native)
+                    coloured = editor.text.getSpans(0, editor.length(),
+                        net.weero.measix.pilot.ui.components.files.FileSyntaxColorSpan::class.java).isNotEmpty()
+                }
+                coloured
+            }
+            compose.runOnIdle {
+                val editor = requireNotNull(native)
+                val palette = if (compose.activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
+                    net.weero.measix.pilot.ui.theme.AtomOneDarkPalette else net.weero.measix.pilot.ui.theme.AtomOneLightPalette
+                val colour = when (current.name.substringAfterLast('.')) {
+                    "html", "xml" -> palette.tag
+                    "json" -> palette.attrName
+                    else -> palette.string
+                }
+                val bitmap = Bitmap.createBitmap(editor.width, minOf(editor.height, 300), Bitmap.Config.ARGB_8888)
+                try {
+                    editor.draw(Canvas(bitmap))
+                    val pixels = IntArray(bitmap.width * bitmap.height)
+                    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                    assertTrue("Source colours must be painted, not merely stored as spans", pixels.any { it == colour.toArgb() })
+                } finally { bitmap.recycle() }
+            }
+            capture("remote-source-${current.name.replace('.', '-')}.png")
+            compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
+            onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+                if (error != null) throw error
+                assertNotNull((view as EditText).keyListener)
+                assertEquals(bodies.getValue(current.name), view.text.toString())
+            }
+            compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        }
+        coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
+    }
+
     private inner class Fixture {
         private val deployment = "dep_550e8400-e29b-41d4-a716-446655440000"
         val selection = RealmSelection(RealmAccess.Enterprise(
@@ -81,6 +147,7 @@ class RemoteWorkspacePageAndroidTest {
                     androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme()) {
                     CompositionLocalProvider(LocalNavController provides Navigator(mutableListOf(Screen.Enterprise)),
                         LocalSettings provides Settings(),
+                        net.weero.measix.pilot.ui.theme.LocalDarkMode provides androidx.compose.foundation.isSystemInDarkTheme(),
                         net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
                         RemoteWorkspacePage(selection, vm)
                     }

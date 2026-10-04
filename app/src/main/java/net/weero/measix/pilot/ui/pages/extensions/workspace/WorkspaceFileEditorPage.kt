@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.pages.extensions.workspace
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -47,8 +48,8 @@ import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.FloppyDisk
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
-import net.weero.measix.pilot.ui.components.ui.FileEditorState
-import net.weero.measix.pilot.ui.components.ui.FileTextEditor
+import net.weero.measix.pilot.ui.components.files.FileEditorState
+import net.weero.measix.pilot.ui.components.files.FileTextEditor
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.logDiagnosticFailure
@@ -213,11 +214,11 @@ private fun WorkspaceFileEditorContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
                     .imePadding(),
                 readOnly = !editable || saving,
-                minLines = 1,
-                maxLines = Int.MAX_VALUE,
                 fillViewport = true,
+                fileName = fileName,
             )
         }
     }

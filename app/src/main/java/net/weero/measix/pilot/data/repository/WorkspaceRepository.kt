@@ -220,7 +220,7 @@ class WorkspaceRepository(
                 if (size > MAX_PREVIEW_BYTES) throw FileTooLargeException(size)
                 ByteArrayOutputStream().use { out ->
                     runInterruptible { manager.exportFile(workspace.root, path, area, out) }
-                    out.toString(Charsets.UTF_8.name())
+                    me.rerere.workspace.decodeWorkspaceText(out.toByteArray())
                 }
             }
         }

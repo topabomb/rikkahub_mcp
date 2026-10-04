@@ -76,7 +76,9 @@ import net.weero.measix.pilot.service.remoteworkspace.*
 import net.weero.measix.pilot.ui.components.files.FileRow
 import net.weero.measix.pilot.ui.components.files.PdfPreview
 import net.weero.measix.pilot.ui.components.richtext.RestrictedMarkdown
-import net.weero.measix.pilot.ui.components.ui.FileTextEditor
+import net.weero.measix.pilot.ui.components.files.FileTextEditor
+import net.weero.measix.pilot.ui.components.files.fileTextFormat
+import androidx.compose.foundation.layout.consumeWindowInsets
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
@@ -412,7 +414,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                                 Icon(when {
                                     file.name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp", "gif", "bmp") -> HugeIcons.Image01
                                     file.name.endsWith(".pdf", ignoreCase = true) -> HugeIcons.Pdf01
-                                    isTextFile(file) -> HugeIcons.FileEdit
+                                    fileTextFormat(file.name) != null -> HugeIcons.FileEdit
                                     else -> HugeIcons.File02
                                 }, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             } },
@@ -676,7 +678,7 @@ private fun VerifyResultDialog(handle: RemoteWorkspaceHandle, path: String, serv
         try {
             file = service.verifyUnknown(handle, path)
             val current = file
-            if (current != null && !current.directory && isTextFile(current)) {
+            if (current != null && !current.directory && fileTextFormat(current.name) != null) {
                 text = try { service.readText(handle, current).content.text }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) { error = failure.userVisibleDiagnostic(); null }
@@ -711,11 +713,6 @@ private fun VerifyResultDialog(handle: RemoteWorkspaceHandle, path: String, serv
     }, enabled = complete && !loading) { Text(stringResource(R.string.remote_workspace_verify)) } },
         dismissButton = { TextButton(dismiss) { Text(stringResource(R.string.common_cancel)) } })
 }
-
-private fun isTextFile(file: RemoteFile) = file.name.substringAfterLast('.', "").lowercase() in setOf(
-    "txt", "md", "markdown", "json", "yaml", "yml", "xml", "csv", "log", "kt", "java", "py", "js", "ts", "css",
-    "sh", "toml", "ini", "conf", "sql", "rs", "go", "c", "h", "cpp", "",
-)
 
 private fun formatFileTime(value: String, full: Boolean = false): String = try {
     DateTimeFormatter.ofLocalizedDateTime(if (full) FormatStyle.MEDIUM else FormatStyle.SHORT)
@@ -788,7 +785,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
             when {
                 image -> Unit
                 extension == "pdf" -> pdf = vm.service.previewCopy(handle, file)
-                isTextFile(file) -> {
+                fileTextFormat(file.name) != null -> {
                     val fresh = vm.service.readText(handle, file)
                     editorSession.accept(fresh)
                 }
@@ -856,7 +853,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
                 DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_open_external)) }, onClick = { actions = false; onShare(true) })
             }
         } }, expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
             .padding(horizontal = if (document != null && (editing || !markdown)) 0.dp else 12.dp, vertical = 4.dp)
             .imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -883,7 +880,14 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { error = failure.userVisibleDiagnostic() } }
                 }
-                document != null -> FileTextEditor(editor, Modifier.weight(1f).fillMaxWidth(), enabled = !saving && !loading, readOnly = !editing, fillViewport = true)
+                document != null -> FileTextEditor(
+                    state = editor,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    enabled = !saving && !loading,
+                    readOnly = !editing,
+                    fillViewport = true,
+                    fileName = file.name,
+                )
                 pdf != null -> PdfPreview(requireNotNull(pdf), Modifier.weight(1f)) {
                     error = it.userVisibleDiagnostic()
                     pdf = null

@@ -4,6 +4,8 @@ import java.io.File
 import java.io.InputStream
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
@@ -37,7 +39,7 @@ class WorkspaceFileSystem(
         require(file.length() <= config.maxReadBytes) {
             "File is too large to read: ${file.length()} bytes"
         }
-        return file.readText(charset)
+        return decodeWorkspaceText(file.readBytes(), charset)
     }
 
     fun writeText(
@@ -217,4 +219,12 @@ class WorkspaceFileSystem(
 
     private fun Path.relativeToString(): String =
         joinToString("/") { it.name }
+}
+
+/** File viewers and tools must not silently replace invalid bytes before allowing a text save. */
+fun decodeWorkspaceText(bytes: ByteArray, charset: Charset = StandardCharsets.UTF_8): String {
+    val text = charset.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
+    require('\u0000' !in text) { "workspace_binary_text" }
+    return text
 }

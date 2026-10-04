@@ -47,8 +47,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import net.weero.measix.pilot.ui.components.ui.FileEditorState
-import net.weero.measix.pilot.ui.components.ui.FileTextEditor
+import net.weero.measix.pilot.ui.components.files.FileEditorState
+import net.weero.measix.pilot.ui.components.files.FileTextEditor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -396,6 +396,7 @@ internal fun EditFileDialog(
         text = {
             FileTextEditor(
                 state = contentState,
+                fileName = skillFile.relativePath,
                 enabled = !busy,
                 label = stringResource(R.string.skill_detail_page_content),
                 minLines = 10,
@@ -446,6 +447,7 @@ internal fun AddFileDialog(
                 )
                 FileTextEditor(
                     state = contentState,
+                    fileName = fileName,
                     enabled = !busy,
                     label = stringResource(R.string.skill_detail_page_content),
                     minLines = 6,

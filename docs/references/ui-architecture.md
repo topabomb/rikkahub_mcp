@@ -262,16 +262,25 @@ Gallery、文件管理与生成页面传入各自可见集合。
 
 ### 正文与提交
 
-本地 Workspace 和 Skill 的文件编辑入口共用 `FileEditorState` / `FileTextEditor`，正文只在当前 composition 内存中保存。
+本地 Workspace、远程文件和 Skill 复用 `ui/components/files` 的 `FileEditorState` / `FileTextEditor`。
+本地与 Skill 正文只在当前 composition 内存中保存；远程编辑会话的生命周期见下文。
 路径、名称等小状态可以保存，大段正文不放入 rememberSaveable、SavedStateHandle、导航参数或原生 View state。
-Activity 重建或进程恢复后重新读取已发布文件，不承诺恢复未保存正文；普通后台停留未重建时保留内存内容。
+本地与 Skill 在 Activity 重建或进程恢复后重新读取已发布文件，不承诺恢复未保存正文；普通后台停留未重建时保留内存内容。
 
 `FileEditorState` 与原生 `FileEditText` 共用一个 Editable，派生 revision 和提交 snapshot 不构成第二份可写正文。
 只读切换保留原 buffer。`FileEditorInputConnection` 只限制 IME 查询窗口，不截断文件；
 过大选区/快照不返回伪造截断结果，全文 extracted text/monitor 和可产生大回包的几何查询不注册。
 输入、组合、删除、选择使用原生协议，复制与保存仍读取完整正文。
 
-`FileTextEditor` 的 `fillViewport` 模式占满受限视口；Skill 等表单使用有边框的输入框。工作区编辑、保存及批量下载使用具有原操作名称的图标，
+源码预览与编辑共用原生多行 `FileEditText`；只读切换保持同一正文、选择和滚动能力。
+`FileTextEditor` 的 `fillViewport` 模式占满受限视口，不施加表单行数上限；Skill 等表单使用有边框及行数约束的输入框。
+`fileTextFormat` 统一识别常见文本、代码、配置及无扩展名文件，语言只选择高亮，不要求 JSON/XML 在编辑中合法。
+HTML/XML/SVG 按源码显示，不执行 HTML；未知语法的文本保持普通文本显示。
+高亮复用 `highlight` 的 `CodeHighlighter`、`highlightTokenStyle` 和原有深浅色配色。
+文件与语言各自持有解析实例，避免可变 matcher 与消息渲染或已取消的旧语言计算并发使用。
+解析在后台串行合并快速输入，仅对当前正文 revision 应用结果；最多处理 128 Ki 个 UTF-16 字符和 10,000 个颜色 span，
+超出预算仍可阅读、编辑和保存完整正文。只管理专有 `FileSyntaxColorSpan`，不修改正文或清理 IME/选择 span，样式变化不产生 dirty。
+工作区编辑、保存及批量下载使用具有原操作名称的图标，
 触摸区域至少 48dp；另存、重新读取和删除保留文字菜单及必要确认。
 本地文件编辑退出时比较已加载或成功提交的正文，未保存时确认，保存中不退出；不改变重建后重新读取的契约。
 

@@ -3,6 +3,8 @@ package net.weero.measix.pilot.ui.pages.extensions.workspace
 import android.content.Intent
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import net.weero.measix.pilot.ui.components.files.FileType
+import net.weero.measix.pilot.ui.components.files.fileType
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -288,16 +290,16 @@ fun WorkspaceDetailPage(id: String) {
                         when {
                             entry.isDirectory -> vm.open(entry)
 
-                            else -> when (entry.detectFileType()) {
-                                WorkspaceFileType.TEXT -> navController.navigate(
+                            else -> when (fileType(entry.name)) {
+                                FileType.TEXT -> navController.navigate(
                                     Screen.WorkspaceFileEditor(id, state.area.name, entry.path)
                                 )
 
-                                WorkspaceFileType.IMAGE -> {
+                                FileType.IMAGE -> {
                                     previewImage = WorkspaceImagePreview(entry, state.area, vm.imageSource(entry, state.area))
                                 }
 
-                                WorkspaceFileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
+                                FileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
                                     val uri = FileProvider.getUriForFile(
                                         context,
                                         "${context.packageName}.fileprovider",
@@ -767,7 +769,7 @@ private fun WorkspaceFilesPage(
                 selected = entry.path in selected,
                 selecting = selected.isNotEmpty(),
                 onSelect = { onToggleSelection(entry) },
-                image = if (!entry.isDirectory && entry.detectFileType() == WorkspaceFileType.IMAGE) {
+                image = if (!entry.isDirectory && fileType(entry.name) == FileType.IMAGE) {
                     remember(entry, state.area, imageSource) { imageSource(entry, state.area) }
                 } else null,
                 onOpen = { onOpen(entry) },
