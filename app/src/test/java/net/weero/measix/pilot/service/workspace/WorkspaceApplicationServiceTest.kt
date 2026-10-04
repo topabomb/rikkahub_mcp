@@ -27,6 +27,24 @@ class WorkspaceApplicationServiceTest {
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
+    @Test fun `share handoff failure cleans copy and next share prunes expired files`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        coEvery { repository.exportFile("id", area, "file", any()) } coAnswers { arg<java.io.OutputStream>(3).write(byteArrayOf(1, 2)) }
+        val service = workspaceService(repository, mockk())
+        var failedCopy: java.io.File? = null
+        val result = runCatching { service.shareFile("id", area, "file", "file.txt") { failedCopy = it; error("no recipient") } }
+        assertTrue(result.isFailure)
+        assertFalse(requireNotNull(failedCopy).exists())
+        var shared: java.io.File? = null
+        service.shareFile("id", area, "file", "file.txt") { shared = it }
+        val old = requireNotNull(shared)
+        assertTrue(old.exists())
+        assertTrue(old.setLastModified(System.currentTimeMillis() - 25L * 60 * 60 * 1000))
+        service.shareFile("id", area, "file", "file.txt") { assertTrue(it.exists()) }
+        assertFalse(old.exists())
+    }
+
     @Test fun `media creation cancellation after opening closes the untransferred descriptor`() = runTest {
         val repository = mockk<WorkspaceRepository>()
         val descriptor = mockk<android.os.ParcelFileDescriptor>(relaxed = true)

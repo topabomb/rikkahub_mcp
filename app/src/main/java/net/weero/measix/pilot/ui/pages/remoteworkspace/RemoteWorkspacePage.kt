@@ -51,6 +51,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.Add01
@@ -59,6 +60,7 @@ import me.rerere.hugeicons.stroke.SquareArrowUpRight
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick02
@@ -256,7 +258,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
         }
     }
     Scaffold(topBar = {
-        TopAppBar(title = {
+        TopAppBar(expandedHeight = 48.dp, title = {
             if (filtering && selected.isEmpty()) {
                 val label = stringResource(R.string.remote_workspace_filter)
                 val inputFocus = remember { FocusRequester() }
@@ -273,7 +275,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                             input() }
                     })
             } else Text(if (selected.isEmpty()) stringResource(R.string.remote_workspace_title)
-                else stringResource(R.string.remote_workspace_selected, selected.size), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else stringResource(R.string.remote_workspace_selected, selected.size), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
         },
             navigationIcon = { IconButton({ back() }) {
                 Icon(if (selected.isEmpty()) HugeIcons.ArrowLeft01 else HugeIcons.Cancel01,
@@ -369,7 +371,7 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                     }
                 }
                 state.error?.let { Text(stringResource(R.string.remote_workspace_operation_failed), color = MaterialTheme.colorScheme.error); Diagnostic(it) }
-                if (state.loading) {
+                if (state.loading && state.directory == null) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.remote_workspace_loading), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -403,43 +405,45 @@ internal fun RemoteWorkspacePage(selection: RealmSelection?, vm: RemoteWorkspace
                     RemoteFileColumns(null)
                     Spacer(Modifier.width(48.dp))
                 }
-                LazyColumn(Modifier.weight(1f).testTag("remote-file-list"), state = fileListState, contentPadding = PaddingValues(bottom = 8.dp)) {
-                    if (!state.loading && state.directory != null && entries.isEmpty()) item {
-                        Text(stringResource(if (filter.isNotBlank()) R.string.search_page_no_results else R.string.remote_workspace_empty), Modifier.padding(vertical = 32.dp))
-                    }
-                    items(entries, key = { it.path }) { file ->
-                        FileRow(file.name, if (wide) "" else listOfNotNull(file.size?.takeUnless { file.directory }?.fileSizeToString(), file.modifiedAt?.let { formatFileTime(it) }).joinToString(" · "),
-                            file.directory, file.path in selected, selected.isNotEmpty(),
-                            onOpen = { if (!state.running) { if (file.directory) vm.browse(file.path) else vm.openPreview(file) } },
-                            onSelect = { if (!state.running) selected = if (file.path in selected) selected - file.path else selected + file.path },
-                            compact = true,
-                            metadata = if (wide) { { RemoteFileColumns(file) } } else null,
-                            thumbnail = if (file.directory) null else { {
-                                Icon(when {
-                                    fileType(file.name) == FileType.IMAGE -> HugeIcons.Image01
-                                    file.name.endsWith(".pdf", ignoreCase = true) -> HugeIcons.Pdf01
-                                    fileTextFormat(file.name) != null -> HugeIcons.FileEdit
-                                    else -> HugeIcons.File02
-                                }, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } },
-                        ) { dismiss ->
-                            if (!file.directory) {
-                                DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_download)) }, onClick = { dismiss(); export(listOf(file)) }, enabled = !state.running)
-                                DropdownMenuItem(text = { Text(stringResource(R.string.common_share)) }, onClick = { dismiss(); share(file, false) }, enabled = !state.running)
-                            }
-                            DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_rename)) }, enabled = !state.running && (file.directory || file.versioned), onClick = {
-                                dismiss(); val original = state.handle ?: return@DropdownMenuItem
-                                name = NamePrompt(R.string.remote_workspace_rename, original, file.name) { value ->
-                                    val target = WorkspaceFileRules.child(file.path.substringBeforeLast('/', ""), value)
-                                    vm.rename(original, file, target)
+                PullToRefreshBox(isRefreshing = state.loading, onRefresh = { if (!state.running) vm.retry() }, modifier = Modifier.weight(1f)) {
+                    LazyColumn(Modifier.fillMaxSize().testTag("remote-file-list"), state = fileListState, contentPadding = PaddingValues(bottom = 8.dp)) {
+                        if (!state.loading && state.directory != null && entries.isEmpty()) item {
+                            Text(stringResource(if (filter.isNotBlank()) R.string.search_page_no_results else R.string.remote_workspace_empty), Modifier.padding(vertical = 32.dp))
+                        }
+                        items(entries, key = { it.path }) { file ->
+                            FileRow(file.name, if (wide) "" else listOfNotNull(file.size?.takeUnless { file.directory }?.fileSizeToString(), file.modifiedAt?.let { formatFileTime(it) }).joinToString(" · "),
+                                file.directory, file.path in selected, selected.isNotEmpty(),
+                                onOpen = { if (!state.running) { if (file.directory) vm.browse(file.path) else vm.openPreview(file) } },
+                                onSelect = { if (!state.running) selected = if (file.path in selected) selected - file.path else selected + file.path },
+                                compact = true,
+                                metadata = if (wide) { { RemoteFileColumns(file) } } else null,
+                                thumbnail = if (file.directory) null else { {
+                                    Icon(when {
+                                        fileType(file.name) == FileType.IMAGE -> HugeIcons.Image01
+                                        file.name.endsWith(".pdf", ignoreCase = true) -> HugeIcons.Pdf01
+                                        fileTextFormat(file.name) != null -> HugeIcons.FileEdit
+                                        else -> HugeIcons.File02
+                                    }, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } },
+                            ) { dismiss ->
+                                if (!file.directory) {
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_download)) }, onClick = { dismiss(); export(listOf(file)) }, enabled = !state.running)
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.common_share)) }, onClick = { dismiss(); share(file, false) }, enabled = !state.running)
                                 }
-                            })
-                            for ((label, action) in listOf(R.string.remote_workspace_move to RemoteFileAction.MOVE, R.string.remote_workspace_copy to RemoteFileAction.COPY)) {
-                                DropdownMenuItem(text = { Text(stringResource(label)) }, enabled = !state.running && (file.directory || file.versioned), onClick = { dismiss(); state.handle?.let { folder = FolderPrompt(label, it, listOf(file), action) } })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_rename)) }, enabled = !state.running && (file.directory || file.versioned), onClick = {
+                                    dismiss(); val original = state.handle ?: return@DropdownMenuItem
+                                    name = NamePrompt(R.string.remote_workspace_rename, original, file.name) { value ->
+                                        val target = WorkspaceFileRules.child(file.path.substringBeforeLast('/', ""), value)
+                                        vm.rename(original, file, target)
+                                    }
+                                })
+                                for ((label, action) in listOf(R.string.remote_workspace_move to RemoteFileAction.MOVE, R.string.remote_workspace_copy to RemoteFileAction.COPY)) {
+                                    DropdownMenuItem(text = { Text(stringResource(label)) }, enabled = !state.running && (file.directory || file.versioned), onClick = { dismiss(); state.handle?.let { folder = FolderPrompt(label, it, listOf(file), action) } })
+                                }
+                                DropdownMenuItem(text = { Text(stringResource(R.string.common_delete)) }, enabled = !state.running && (file.directory || file.versioned), onClick = { dismiss(); state.handle?.let { delete = it to listOf(file) } })
+                                DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_details)) }, onClick = { dismiss(); detailFile = file; details = true })
+                                if (!file.directory && !file.versioned) Text(stringResource(R.string.remote_workspace_no_version), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                             }
-                            DropdownMenuItem(text = { Text(stringResource(R.string.common_delete)) }, enabled = !state.running && (file.directory || file.versioned), onClick = { dismiss(); state.handle?.let { delete = it to listOf(file) } })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_details)) }, onClick = { dismiss(); detailFile = file; details = true })
-                            if (!file.directory && !file.versioned) Text(stringResource(R.string.remote_workspace_no_version), Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -758,9 +762,6 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val document = editorSession.document
-    val density = LocalDensity.current
-    val compactToolbar = with(density) { LocalWindowInfo.current.containerSize.height.toDp() < 480.dp } ||
-        WindowInsets.ime.getBottom(density) > 0
     var pdf by remember(file, handle) { mutableStateOf<File?>(null) }
     var error by remember(file, handle) { mutableStateOf<String?>(null) }
     var loading by remember(file, handle) { mutableStateOf(document == null) }
@@ -790,7 +791,15 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
             if (reload > 0) vm.service.refresh(handle.selection)
             when {
                 image -> Unit
-                type == FileType.PDF -> pdf = vm.service.previewCopy(handle, file)
+                type == FileType.PDF -> {
+                    val copy = vm.service.previewCopy(handle, file)
+                    try {
+                        pdf = copy; loading = false
+                        snapshotFlow { pdf }.first { it !== copy }
+                    } finally {
+                        withContext(kotlinx.coroutines.NonCancellable) { vm.service.releaseCopy(copy) }
+                    }
+                }
                 type == FileType.VIDEO || type == FileType.AUDIO -> {
                     val source = vm.service.mediaSource(handle, file)
                     try { media = source; loading = false; kotlinx.coroutines.awaitCancellation() }
@@ -807,10 +816,6 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
     }
     LaunchedEffect(result) {
         if (result?.outcome == RemoteOutcome.SUCCEEDED) onClose()
-    }
-    DisposableEffect(pdf) {
-        val copy = pdf
-        onDispose { copy?.let { vm.service.releaseCopyLater(it) } }
     }
     val images = remember(handle, file) { mutableSetOf<String>() }
     val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(handle, file) { { reference ->
@@ -853,7 +858,7 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
         })
         return
     }
-    Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+    Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
         navigationIcon = { IconButton({ close() }, enabled = !saving) { Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back)) } },
         actions = {
             if (document != null && !editing && (markdown || type == FileType.SVG)) TextButton({ sourceView = !sourceView }) {
@@ -880,9 +885,9 @@ private fun RemoteFilePreview(file: RemoteFile, handle: RemoteWorkspaceHandle, v
                 DropdownMenuItem(text = { Text(stringResource(R.string.common_share)) }, onClick = { actions = false; onShare(false) })
                 DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_open_external)) }, onClick = { actions = false; onShare(true) })
             }
-        } }, expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight) }) { padding ->
+        } }, expandedHeight = 48.dp) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
-            .padding(horizontal = if (document != null && (editing || !markdown)) 0.dp else 12.dp, vertical = 4.dp)
+            .padding(horizontal = if (document != null && (editing || !markdown)) 0.dp else 12.dp, vertical = 0.dp)
             .imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (state.running) TransferStatus(state, vm::cancel)

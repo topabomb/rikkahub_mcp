@@ -6,6 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToolErrorProtocolTest {
+    @Test fun `URL credentials are removed while diagnostic host and path remain`() {
+        assertEquals("HTTP 401 https://<redacted>@files.example/a.png",
+            ToolErrorProtocol.redactSecrets("HTTP 401 https://user:p%40ss@files.example/a.png"))
+    }
+
     @Test
     fun `clear reason omits detail instead of repeating the code`() {
         val envelope = ToolErrorProtocol.envelope("unavailable", "authorization_required")

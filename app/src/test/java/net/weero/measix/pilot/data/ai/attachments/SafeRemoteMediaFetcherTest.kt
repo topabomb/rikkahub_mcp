@@ -7,6 +7,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import javax.net.ssl.SSLSocketFactory
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 
@@ -142,66 +143,82 @@ class SafeRemoteMediaFetcherTest {
         assertEquals(listOf(checked), seen)
     }
 
-    /**
-     * 真实 transport 路径（Android OkHttp / OpenJDK）都是先建 TCP socket、再走
-     * createSocket(Socket, host, port, autoClose) 包 SSL。这里直接测试该 overload：
-     * 远端地址不等于 pin 必须拒绝，等于 pin 才交给 delegate。
-     */
-    @Test
-    fun `pinning ssl factory rejects already-connected socket to wrong address`() {
-        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        val pin = InetAddress.getByName("1.2.3.4")
-        val delegate = RecordingSslSocketFactory()
-        val factory = PinningSslSocketFactory(delegate, pin, 1_000)
-        try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", server.localPort), 2_000)
-                try {
-                    factory.createSocket(socket, "example.com", server.localPort, true)
-                    throw AssertionError("expected pinning rejection")
-                } catch (expected: IOException) {
-                    assertTrue(expected.message!!.contains("pinned connection refused"))
+    @Test fun `inspection allows LAN but still rejects loopback and metadata`() = runTest {
+        val fetcher = SafeRemoteMediaFetcher(
+            dnsLookup = { listOf(InetAddress.getByName("192.168.1.10")) },
+            transport = { _, _ -> RemoteHttpResponse(200, emptyMap(), TINY_PNG) },
+        )
+        assertTrue(fetcher.fetch("http://192.168.1.10/image.png", true) is RemoteMediaFetchResult.Success)
+        assertTrue(fetcher.fetch("http://127.0.0.1/image.png", true) is RemoteMediaFetchResult.Failure)
+        assertTrue(fetcher.fetch("http://169.254.169.254/image.png", true) is RemoteMediaFetchResult.Failure)
+    }
+
+    @Test fun `Basic credentials survive same origin redirect but not cross origin`() = runTest {
+        val authorizations = mutableListOf<String?>()
+        val fetcher = SafeRemoteMediaFetcher(
+            dnsLookup = { listOf(InetAddress.getByName("1.2.3.4")) },
+            transport = { url, _ ->
+                authorizations += SafeRemoteMediaFetcher.basicAuthorization(url)
+                when (authorizations.size) {
+                    1 -> RemoteHttpResponse(302, mapOf("Location" to listOf("https://a.example/next")), ByteArray(0))
+                    2 -> RemoteHttpResponse(302, mapOf("Location" to listOf("https://injected:secret@b.example/image.png")), ByteArray(0))
+                    else -> RemoteHttpResponse(200, emptyMap(), TINY_PNG)
+                }
+            },
+        )
+        assertTrue(fetcher.fetch("https://a%2Bb:p%40ss@a.example/image.png") is RemoteMediaFetchResult.Success)
+        assertEquals(listOf(okhttp3.Credentials.basic("a+b", "p@ss"), okhttp3.Credentials.basic("a+b", "p@ss"), null), authorizations)
+    }
+
+    @Test fun `HTTP failures explain authentication without copying secret URLs`() = runTest {
+        val fetcher = SafeRemoteMediaFetcher(dnsLookup = { listOf(InetAddress.getByName("1.2.3.4")) },
+            transport = { _, _ -> RemoteHttpResponse(401, emptyMap(), ByteArray(0)) })
+        val result = fetcher.fetch("https://user:secret@a.example/image.png") as RemoteMediaFetchResult.Failure
+        assertEquals("HTTP 401: missing or rejected authentication.", result.detail)
+    }
+
+    @Test fun `real transport pins DNS sends Basic and rejects oversized body`() = kotlinx.coroutines.runBlocking {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            val request = kotlinx.coroutines.CompletableDeferred<String>()
+            val worker = kotlin.concurrent.thread(isDaemon = true) {
+                server.accept().use { socket ->
+                    val reader = socket.getInputStream().bufferedReader()
+                    val lines = generateSequence { reader.readLine()?.takeIf { it.isNotEmpty() } }.toList()
+                    request.complete(lines.joinToString("\n"))
+                    socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 4000000000\r\nConnection: close\r\n\r\n".toByteArray())
                 }
             }
-            assertEquals(0, delegate.invocations)
-        } finally {
-            server.close()
+            val result = SafeRemoteMediaFetcher.defaultTransport(URL("http://user:pass@assets.invalid:${server.localPort}/image"),
+                listOf(InetAddress.getByName("127.0.0.1")), 1000, 1000, 1024)
+            assertEquals(413, result.code)
+            val sent = request.await()
+            assertTrue(sent.contains("Host: assets.invalid:"))
+            assertTrue(sent.contains("Authorization: ${okhttp3.Credentials.basic("user", "pass")}"))
+            worker.join(2000)
         }
     }
 
-    @Test
-    fun `pinning ssl factory passes through socket already connected to pin`() {
-        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        val pin = InetAddress.getByName("127.0.0.1")
-        val delegate = RecordingSslSocketFactory()
-        val factory = PinningSslSocketFactory(delegate, pin, 1_000)
-        try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", server.localPort), 2_000)
-                val wrapped = factory.createSocket(socket, "example.com", server.localPort, false)
-                assertEquals(1, delegate.invocations)
-                assertSame(socket, wrapped)
+    @Test fun `cancellation closes a slow response before read timeout`() = kotlinx.coroutines.runBlocking {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val closed = kotlinx.coroutines.CompletableDeferred<Unit>()
+            kotlin.concurrent.thread(isDaemon = true) {
+                server.accept().use { socket ->
+                    val reader = socket.getInputStream().bufferedReader()
+                    while (!reader.readLine().isNullOrEmpty()) { }
+                    socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nx".toByteArray())
+                    socket.getOutputStream().flush()
+                    started.complete(Unit)
+                    try { while (socket.getInputStream().read() != -1) { } } finally { closed.complete(Unit) }
+                }
             }
-        } finally {
-            server.close()
+            val call = async {
+                SafeRemoteMediaFetcher.defaultTransport(URL("http://assets.invalid:${server.localPort}/slow"),
+                    listOf(InetAddress.getByName("127.0.0.1")), 1000, 15000, 1024)
+            }
+            started.await()
+            kotlinx.coroutines.withTimeout(2000) { call.cancel(); call.join(); closed.await() }
+            assertTrue(call.isCancelled)
         }
-    }
-
-    private class RecordingSslSocketFactory : SSLSocketFactory() {
-        var invocations = 0
-        private fun unsupported(): Nothing = error("only the layered overload is expected")
-
-        override fun getDefaultCipherSuites(): Array<String> = emptyArray()
-        override fun getSupportedCipherSuites(): Array<String> = emptyArray()
-
-        override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket {
-            invocations++
-            return s
-        }
-
-        override fun createSocket(host: String, port: Int): Socket = unsupported()
-        override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket = unsupported()
-        override fun createSocket(host: InetAddress, port: Int): Socket = unsupported()
-        override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket = unsupported()
     }
 }

@@ -37,6 +37,7 @@ data class ToolCallLocator(
 data class ToolAttachmentResolution(
     val parts: List<UIMessagePart> = emptyList(),
     val failureReason: String? = null,
+    val failureDetail: String? = null,
 )
 
 /**

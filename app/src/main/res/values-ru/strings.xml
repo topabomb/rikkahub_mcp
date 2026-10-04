@@ -1519,7 +1519,7 @@
   <string name="chat_message_tool_inspection">Проверить вложения</string>
   <string name="chat_message_tool_inspection_running">Проверка вложений</string>
   <string name="chat_message_tool_inspection_failed">Не удалось проверить вложения</string>
-  <string name="chat_message_tool_inspection_failed_invalid_arguments">Недопустимые аргументы inspect_attachments</string>
+  <string name="chat_message_tool_inspection_failed_invalid_arguments">Недопустимые аргументы проверки вложений</string>
   <string name="chat_message_tool_inspection_failed_attachment">Не удалось разрешить вложение</string>
   <string name="chat_message_tool_inspection_failed_model_unavailable">Модель проверки недоступна</string>
   <string name="chat_message_tool_inspection_failed_rate_limited">Достигнут лимит частоты проверки вложений</string>
@@ -2111,4 +2111,8 @@
   <string name="file_preview_source">Исходный текст</string>
   <string name="image_viewer_close_content_description">Закрыть просмотр изображения</string>
   <string name="image_viewer_load_failed">Не удалось открыть изображение</string>
+  <string name="file_line_numbers">Номера строк</string>
+  <string name="file_large_plain_text">Большой текст: подсветка синтаксиса отключена.</string>
+  <string name="chat_message_tool_inspect_assistant">Просмотр настроек ассистента</string>
+  <string name="file_long_lines_no_wrap">Длинные строки: прокручивайте по горизонтали.</string>
 </resources>

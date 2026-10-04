@@ -51,7 +51,8 @@ object ToolErrorProtocol {
     }
 
     fun redactSecrets(text: String): String {
-        val withoutHeaders = SENSITIVE_HEADERS.replace(text) { match ->
+        val withoutUserInfo = SENSITIVE_URL_USERINFO.replace(text) { match -> "${match.groupValues[1]}<redacted>@" }
+        val withoutHeaders = SENSITIVE_HEADERS.replace(withoutUserInfo) { match ->
             match.groupValues[1] + match.groupValues[2] + "<redacted>"
         }
         val withoutBearer = SENSITIVE_BEARER.replace(withoutHeaders) { match ->
@@ -65,6 +66,7 @@ object ToolErrorProtocol {
         }
     }
 
+    private val SENSITIVE_URL_USERINFO = Regex("(?i)(https?://)[^/\\s@]+@")
     private val SENSITIVE_HEADERS = Regex("(?im)\\b(authorization|cookie|set-cookie)(\\s*[:=]\\s*)[^\\r\\n]+")
     private val SENSITIVE_BEARER = Regex("(?i)(\\bbearer\\s+)[A-Za-z0-9._~+/-]+")
     private val SENSITIVE_PASSPHRASES = Regex(

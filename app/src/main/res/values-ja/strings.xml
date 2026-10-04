@@ -1519,7 +1519,7 @@
   <string name="chat_message_tool_inspection">添付ファイルを確認</string>
   <string name="chat_message_tool_inspection_running">添付ファイルを確認しています</string>
   <string name="chat_message_tool_inspection_failed">添付ファイルの確認に失敗しました</string>
-  <string name="chat_message_tool_inspection_failed_invalid_arguments">inspect_attachments の引数が無効です</string>
+  <string name="chat_message_tool_inspection_failed_invalid_arguments">添付ファイル確認の引数が無効です</string>
   <string name="chat_message_tool_inspection_failed_attachment">添付ファイルを解決できませんでした</string>
   <string name="chat_message_tool_inspection_failed_model_unavailable">確認用モデルを利用できません</string>
   <string name="chat_message_tool_inspection_failed_rate_limited">添付ファイル確認のレート制限に達しました</string>
@@ -2111,4 +2111,8 @@
   <string name="file_preview_source">ソース</string>
   <string name="image_viewer_close_content_description">画像プレビューを閉じる</string>
   <string name="image_viewer_load_failed">画像をプレビューできません</string>
+  <string name="file_line_numbers">行番号</string>
+  <string name="file_large_plain_text">テキストが大きいため、構文の強調表示を無効にしています。</string>
+  <string name="chat_message_tool_inspect_assistant">アシスタント設定を確認</string>
+  <string name="file_long_lines_no_wrap">長い行は横にスワイプして読めます。</string>
 </resources>

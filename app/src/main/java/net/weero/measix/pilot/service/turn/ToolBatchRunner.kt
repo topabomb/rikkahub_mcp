@@ -117,7 +117,7 @@ internal class ToolBatchRunner(
                     state.publishMessages(state.messages)
                     Log.i(
                         TAG,
-                        "generateText: executing tool ${call.definition.name} with args: ${call.arguments}",
+                        "generateText: executing tool ${call.definition.name}",
                     )
 
                     // File-owner reads are independent of this conversation and Workspace.
@@ -132,6 +132,7 @@ internal class ToolBatchRunner(
 
                                 is AttachmentResolveResult.Failure -> ToolAttachmentResolution(
                                     failureReason = resolvedAttachments.reason,
+                                    failureDetail = resolvedAttachments.detail,
                                 )
                             }
                         },

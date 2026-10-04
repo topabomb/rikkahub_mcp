@@ -229,10 +229,11 @@ Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入
 `inspect_attachments` 使用 `ToolExecutionContext.resolveAttachments` 提供的只读文件能力：
 
 ```text
-/upload/<file>（1..4 个，精确文件路径）
+/upload/<file> 或 HTTP(S) 附件 URL（1..4 个）
 → ToolExecutionContext.resolveAttachments(paths)
 → AttachmentResolver.readImages(scope, paths)
-→ ArtifactStore.withUploadImages（授权与保留文件，有界读取和图片校验）
+→ 本地：ArtifactStore.withUploadImages（授权与保留文件，有界读取和图片校验）
+→ 远程：SafeRemoteMediaFetcher（Basic、逐跳地址检查、有界内存读取）
 → 共用 FileEncoder 规范化内存快照 → data URI Image parts，无临时文件
 → 识图模型（[Image N path=...] + 图片 + request；独立固定 system instruction）
 → Text Tool Result
@@ -241,10 +242,12 @@ Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入
 - `AttachmentInspectionTool` 通过捕获的 `ModelRequests` 发起独立识图请求；借用视图只提供执行能力，原 Runtime 的 `ModelExecutionLease` 唯一持有并释放共享企业 binding，关闭后全部角色立即不可再准入。工具不持有另一份凭据 owner。
   各请求复验原助手、原模型及 Child caller/target 授权，保持原 endpoint/protocol/model shape。CHAT 使用原助手的有效模型选择，识图使用本域识图选择；两者分别冻结，不受后续用户选择变动影响。用户凭据从原 owner 刷新，企业私有 header/凭据走相同受管请求边界。
   `RequestMediaCapabilities` 在捕获时冻结，IMAGE 模型必须提供结构化 USER 图片编码；远端不兼容由真实 Provider 分类错误表达。企业执行沿原平台 binding 和准入协议，测试中的模拟响应不代表产品中的独立执行来源。
-- paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；内部标签使用原请求路径。识图与委托入口均不接受 UUID、HTTP(S)、file URI、workspace 或越界路径，不提供旧参数兼容入口。
+- paths 与产出 1:1、顺序稳定，重复路径保留对应图片位置；本地标签使用原请求路径，远程只传附件序号，不向识图 Provider 转交资源 URL 或凭据。委托仍只接受 /upload 路径；识图额外接受 HTTP(S)。两者均不接受 UUID、file URI、workspace 或越界路径。
 - `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
   识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
+- 远程图片每个最多 20 MiB，声明长度和实际字节数都受限，下载有总超时；最多 4 个顺序处理。允许用户 LAN 发布资源，仍拒绝 loopback/link-local/metadata 等地址。跨源跳转移除 Basic，拒绝 HTTPS 降级。
+  `Call.readResponse` 持有请求直到响应体消费结束，取消调用真实 Call.cancel 并关闭响应；没有识别临时文件。图像解码前限制尺寸和像素，取消检查位于编码各阶段，单次原生解码/压缩需结束后才能观察取消。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。
 - 失败 reason 原样透传，代码含义见 [提示词与工具](prompts-and-tools.md)。
 

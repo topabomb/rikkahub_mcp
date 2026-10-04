@@ -1,22 +1,17 @@
 package net.weero.measix.pilot.data.ai.attachments
 
+import me.rerere.common.http.readResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
-import java.net.HttpURLConnection
 import java.net.IDN
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.URI
 import java.net.URL
 import java.util.Locale
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLSocketFactory
 
 data class RemoteHttpResponse(
     val code: Int,
@@ -25,7 +20,7 @@ data class RemoteHttpResponse(
 )
 
 fun interface RemoteHttpTransport {
-    fun execute(url: URL, resolvedAddresses: List<InetAddress>): RemoteHttpResponse
+    suspend fun execute(url: URL, resolvedAddresses: List<InetAddress>): RemoteHttpResponse
 }
 
 sealed class RemoteMediaFetchResult {
@@ -35,7 +30,7 @@ sealed class RemoteMediaFetchResult {
         val fileName: String,
     ) : RemoteMediaFetchResult()
 
-    data class Failure(val reason: String) : RemoteMediaFetchResult()
+    data class Failure(val reason: String, val detail: String? = null) : RemoteMediaFetchResult()
 }
 
 /**
@@ -54,70 +49,92 @@ class SafeRemoteMediaFetcher(
         defaultTransport(url, addresses, connectTimeoutMs, readTimeoutMs, maxBytes)
     },
 ) {
-    suspend fun fetch(rawUrl: String): RemoteMediaFetchResult {
+    suspend fun fetch(rawUrl: String, allowLocalNetwork: Boolean = false): RemoteMediaFetchResult {
         return try {
-            fetchInternal(rawUrl)
+            fetchInternal(rawUrl, allowLocalNetwork)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Throwable) {
-            RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
+        } catch (error: Exception) {
+            networkFailure(error)
         }
     }
 
-    private suspend fun fetchInternal(rawUrl: String): RemoteMediaFetchResult {
+    private fun networkFailure(error: Exception): RemoteMediaFetchResult.Failure {
+        android.util.Log.w("AttachmentFetch", net.weero.measix.pilot.utils.redactDiagnosticSecrets(error.stackTraceToString()))
+        val detail = net.weero.measix.pilot.utils.redactDiagnosticSecrets("${error.javaClass.simpleName}: ${error.message.orEmpty()}").take(300)
+        return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED, detail)
+    }
+
+    private suspend fun fetchInternal(rawUrl: String, allowLocalNetwork: Boolean): RemoteMediaFetchResult {
         var current = parseHttpUrl(rawUrl)
-            ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+            ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "Invalid HTTP(S) URL.")
 
         repeat(maxRedirects + 1) { hop ->
-            val hostCheck = inspectHost(current.host)
+            val hostCheck = inspectHost(current.host, allowLocalNetwork)
             if (hostCheck != null) return hostCheck
 
             val addresses = try {
                 runInterruptible(Dispatchers.IO) { dnsLookup(current.host) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Throwable) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
+            } catch (error: Exception) {
+                return networkFailure(error)
             }
-            if (addresses.isEmpty() || addresses.any(::isBlockedAddress)) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+            if (addresses.isEmpty() || addresses.any { isBlockedAddress(it, allowLocalNetwork) }) {
+                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "URL or resolved address is not allowed.")
             }
 
             val response = try {
-                runInterruptible(Dispatchers.IO) { transport.execute(current, addresses) }
+                transport.execute(current, addresses)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Throwable) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
+            } catch (error: Exception) {
+                return networkFailure(error)
             }
 
             if (response.code in 300..399) {
                 if (hop >= maxRedirects) {
-                    return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+                    return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "Too many redirects (limit $maxRedirects).")
                 }
                 val location = headerValue(response.headers, "Location")
-                    ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
-                current = resolveRedirect(current, location)
-                    ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+                    ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED, "HTTP ${response.code}: redirect has no Location.")
+                val next = resolveRedirect(current, location)
+                    ?: return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "Invalid redirect URL.")
+                if (current.protocol == "https" && next.protocol != "https") {
+                    return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "HTTPS redirect to HTTP refused.")
+                }
+                // Credentials belong to one origin. Redirects cannot introduce credentials.
+                val sameOrigin = current.protocol == next.protocol && current.host.equals(next.host, true) &&
+                    effectivePort(current) == effectivePort(next)
+                current = withUserInfo(next, if (sameOrigin) current.userInfo else null)
                 return@repeat
             }
 
             if (response.code !in 200..299) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
+                return RemoteMediaFetchResult.Failure(
+                    if (response.code == 413) AttachmentFailureReasons.ATTACHMENT_TOO_LARGE else AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED,
+                    when (response.code) {
+                        401 -> "HTTP 401: missing or rejected authentication."
+                        403 -> "HTTP 403: access denied."
+                        404 -> "HTTP 404: resource not found."
+                        413 -> "Attachment exceeds the $maxBytes byte limit."
+                        else -> "HTTP ${response.code}: attachment fetch failed."
+                    },
+                )
             }
             if (response.body.isEmpty()) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED)
+                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED, "HTTP ${response.code}: empty response body.")
             }
             if (response.body.size > maxBytes) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_TOO_LARGE, "Attachment exceeds the $maxBytes byte limit.")
             }
 
             val contentType = headerValue(response.headers, "Content-Type")
             if (ImageMime.isUnsupportedNonImage(response.body, contentType)) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
+                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE, "The response is not a supported image; directories and HTML pages cannot be inspected.")
             }
             if (!ImageMime.isAcceptedImage(response.body)) {
-                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
+                return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE, "The response is not a supported image; directories and HTML pages cannot be inspected.")
             }
 
             val mime = requireNotNull(ImageMime.sniff(response.body)) {
@@ -130,12 +147,12 @@ class SafeRemoteMediaFetcher(
                 fileName = fileName,
             )
         }
-        return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+        return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "URL or resolved address is not allowed.")
     }
 
-    internal fun inspectHost(host: String?): RemoteMediaFetchResult.Failure? {
+    internal fun inspectHost(host: String?, allowLocalNetwork: Boolean = false): RemoteMediaFetchResult.Failure? {
         if (host.isNullOrBlank()) {
-            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "URL or resolved address is not allowed.")
         }
         val normalized = normalizeHost(host)
         if (normalized == "localhost" ||
@@ -144,27 +161,27 @@ class SafeRemoteMediaFetcher(
             normalized.endsWith(".internal") ||
             normalized == "0.0.0.0"
         ) {
-            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "URL or resolved address is not allowed.")
         }
         val literal = parseLiteralAddress(host)
-        if (literal != null && isBlockedAddress(literal)) {
-            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL)
+        if (literal != null && isBlockedAddress(literal, allowLocalNetwork)) {
+            return RemoteMediaFetchResult.Failure(AttachmentFailureReasons.UNSAFE_ATTACHMENT_URL, "URL or resolved address is not allowed.")
         }
         return null
     }
 
-    internal fun isBlockedAddress(address: InetAddress): Boolean {
+    internal fun isBlockedAddress(address: InetAddress, allowLocalNetwork: Boolean = false): Boolean {
         if (address.isAnyLocalAddress ||
             address.isLoopbackAddress ||
             address.isLinkLocalAddress ||
-            address.isSiteLocalAddress ||
+            (!allowLocalNetwork && address.isSiteLocalAddress) ||
             address.isMulticastAddress
         ) {
             return true
         }
         return when (address) {
             is Inet4Address -> isBlockedIpv4(address.address)
-            is Inet6Address -> isBlockedIpv6(address)
+            is Inet6Address -> if (allowLocalNetwork && address.address[0].toInt() and 0xFE == 0xFC) false else isBlockedIpv6(address)
             else -> true
         }
     }
@@ -192,6 +209,21 @@ class SafeRemoteMediaFetcher(
             if (scheme != "http" && scheme != "https") return null
             if (resolved.host.isNullOrBlank()) return null
             return resolved
+        }
+
+        internal fun basicAuthorization(url: URL): String? {
+            val userInfo = url.userInfo ?: return null
+            fun decode(value: String) = java.net.URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
+            return okhttp3.Credentials.basic(decode(userInfo.substringBefore(':')), decode(userInfo.substringAfter(':', "")))
+        }
+
+        private fun effectivePort(url: URL) = if (url.port >= 0) url.port else url.defaultPort
+
+        private fun withUserInfo(url: URL, userInfo: String?): URL {
+            val uri = url.toURI()
+            val host = if (':' in url.host && !url.host.startsWith("[")) "[${url.host}]" else url.host
+            val authority = (userInfo?.let { "$it@" } ?: "") + host + if (url.port >= 0) ":${url.port}" else ""
+            return URL("${url.protocol}://$authority${uri.rawPath.orEmpty()}${uri.rawQuery?.let { "?$it" }.orEmpty()}")
         }
 
         private fun normalizeHost(host: String): String {
@@ -281,123 +313,51 @@ class SafeRemoteMediaFetcher(
             return fromHeader ?: fromPath ?: "remote.$ext"
         }
 
-        private fun defaultTransport(
+        private val httpClient = okhttp3.OkHttpClient.Builder()
+            .followRedirects(false).followSslRedirects(false)
+            .proxy(java.net.Proxy.NO_PROXY)
+            .connectionPool(okhttp3.ConnectionPool(0, 1, java.util.concurrent.TimeUnit.SECONDS))
+            .build()
+
+        internal suspend fun defaultTransport(
             url: URL,
             resolvedAddresses: List<InetAddress>,
             connectTimeoutMs: Int,
             readTimeoutMs: Int,
             maxBytes: Int,
         ): RemoteHttpResponse {
-            val pin = resolvedAddresses.firstOrNull()
-                ?: return RemoteHttpResponse(code = 499, headers = emptyMap(), body = ByteArray(0))
-            val connection = openPinnedConnection(url, pin, connectTimeoutMs)
-            connection.instanceFollowRedirects = false
-            connection.connectTimeout = connectTimeoutMs
-            connection.readTimeout = readTimeoutMs
-            connection.requestMethod = "GET"
-            connection.setRequestProperty("Accept", "image/*,*/*;q=0.8")
-            try {
-                connection.connect()
-                val code = connection.responseCode
-                val headers = connection.headerFields
-                    .filterKeys { it != null }
-                    .mapKeys { it.key }
-                    .mapValues { it.value.orEmpty() }
-                val contentLength = connection.contentLengthLong
-                if (contentLength > maxBytes) {
-                    return RemoteHttpResponse(code = 413, headers = headers, body = ByteArray(0))
+            require(resolvedAddresses.isNotEmpty())
+            val cleanUrl = withUserInfo(url, null)
+            val client = httpClient.newBuilder()
+                .dns { host ->
+                    require(host.equals(url.host.removePrefix("[").removeSuffix("]"), true))
+                    resolvedAddresses
                 }
-                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val body = stream?.use { input ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                .connectTimeout(connectTimeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .readTimeout(readTimeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .callTimeout((connectTimeoutMs + readTimeoutMs).toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+                .build()
+            val request = okhttp3.Request.Builder().url(cleanUrl).header("Accept", "image/*,*/*;q=0.8")
+            basicAuthorization(url)?.let { request.header("Authorization", it) }
+            return client.newCall(request.build()).readResponse { response ->
+                val headers = response.headers.toMultimap()
+                val body = response.body
+                if (response.code !in 200..299) {
+                    RemoteHttpResponse(response.code, headers, ByteArray(0))
+                } else if (body.contentLength() > maxBytes) {
+                    RemoteHttpResponse(413, headers, ByteArray(0))
+                } else body.byteStream().use { input ->
                     val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
                         val read = input.read(buffer)
-                        if (read <= 0) break
-                        if (out.size() + read > maxBytes) {
-                            return RemoteHttpResponse(code = 413, headers = headers, body = ByteArray(0))
-                        }
+                        if (read < 0) break
+                        if (out.size().toLong() + read > maxBytes) return@readResponse RemoteHttpResponse(413, headers, ByteArray(0))
                         out.write(buffer, 0, read)
                     }
-                    out.toByteArray()
-                } ?: ByteArray(0)
-                return RemoteHttpResponse(code = code, headers = headers, body = body)
-            } finally {
-                connection.disconnect()
-            }
-        }
-
-        private fun openPinnedConnection(
-            url: URL,
-            pin: InetAddress,
-            connectTimeoutMs: Int,
-        ): HttpURLConnection {
-            val originalHost = url.host
-            val hostHeader = if (url.port != -1) "$originalHost:${url.port}" else originalHost
-            return if (url.protocol.equals("https", ignoreCase = true)) {
-                val connection = url.openConnection() as HttpsURLConnection
-                val delegate = connection.sslSocketFactory ?: HttpsURLConnection.getDefaultSSLSocketFactory()
-                connection.sslSocketFactory = PinningSslSocketFactory(delegate, pin, connectTimeoutMs)
-                connection.hostnameVerifier = HostnameVerifier { hostname, session ->
-                    HttpsURLConnection.getDefaultHostnameVerifier().verify(originalHost, session) ||
-                        HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
+                    RemoteHttpResponse(response.code, headers, out.toByteArray())
                 }
-                connection.setRequestProperty("Host", hostHeader)
-                connection
-            } else {
-                val ipHost = if (pin is Inet6Address) "[${pin.hostAddress}]" else pin.hostAddress
-                val pinned = URL(url.protocol, ipHost, url.port, url.file)
-                val connection = pinned.openConnection() as HttpURLConnection
-                connection.setRequestProperty("Host", hostHeader)
-                connection
             }
         }
-    }
-}
-
-internal class PinningSslSocketFactory(
-    private val delegate: SSLSocketFactory,
-    private val pin: InetAddress,
-    private val connectTimeoutMs: Int,
-) : SSLSocketFactory() {
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
-
-    /**
-     * Android (com.android.okhttp) 与 OpenJDK 的 HttpsURLConnection 都先自建 TCP socket、
-     * 再通过本 overload 包装 SSL；平台自己解析 DNS，因此这里必须校验已连接地址等于 pin，
-     * 否则 DNS rebinding 会绕过整个 pinning。
-     */
-    override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket {
-        val remote = (s.remoteSocketAddress as? InetSocketAddress)?.address
-        if (remote == null || remote != pin) {
-            runCatching { s.close() }
-            throw java.io.IOException("pinned connection refused: unexpected remote address $remote")
-        }
-        return delegate.createSocket(s, host, port, autoClose)
-    }
-
-    override fun createSocket(host: String, port: Int): Socket = connectPinned(host, port)
-
-    override fun createSocket(
-        host: String,
-        port: Int,
-        localHost: InetAddress,
-        localPort: Int,
-    ): Socket = connectPinned(host, port)
-
-    override fun createSocket(host: InetAddress, port: Int): Socket = connectPinned(host.hostName, port)
-
-    override fun createSocket(
-        address: InetAddress,
-        port: Int,
-        localAddress: InetAddress,
-        localPort: Int,
-    ): Socket = connectPinned(address.hostName, port)
-
-    private fun connectPinned(sniHost: String, port: Int): Socket {
-        val raw = Socket()
-        raw.connect(InetSocketAddress(pin, port), connectTimeoutMs)
-        return delegate.createSocket(raw, sniHost, port, true)
     }
 }

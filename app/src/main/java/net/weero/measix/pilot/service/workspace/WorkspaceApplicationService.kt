@@ -54,6 +54,48 @@ class WorkspaceApplicationService internal constructor(
     private val catalogGate = Mutex()
     private val mutationGates = Array(GATE_STRIPES) { Mutex() }
 
+    private val activeShares = java.util.concurrent.ConcurrentHashMap.newKeySet<File>()
+
+    /** System recipients may read handed-off files for 24 hours; failed handoffs own no cache. */
+    suspend fun shareFile(workspaceId: String, area: WorkspaceStorageArea, path: String, name: String, deliver: (File) -> Unit) {
+        var owned: File? = null
+        var delivered = false
+        var failure: Throwable? = null
+        try {
+            withContext(Dispatchers.IO) {
+                val directory = File(tempRoot.parentFile, "workspace_share")
+                check(directory.isDirectory || directory.mkdirs()) { "workspace_share_directory_unavailable" }
+                val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+                directory.listFiles()?.filter { it.isFile && it !in activeShares && it.lastModified() < cutoff }?.forEach {
+                    if (!it.delete() && it.exists()) throw IOException("workspace_share_cleanup_failed: $it")
+                }
+                val extension = name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+                    .takeIf { it.matches(Regex("[a-z0-9]{1,16}")) }
+                val copy = File(directory, "share-${java.util.UUID.randomUUID()}${extension?.let { ".$it" }.orEmpty()}")
+                owned = copy
+                activeShares += copy
+                copy.outputStream().use { exportFile(workspaceId, area, path, it) }
+            }
+            currentCoroutineContext().ensureActive()
+            deliver(requireNotNull(owned))
+            delivered = true
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                owned?.let { file ->
+                    try {
+                        if (delivered) file.setLastModified(System.currentTimeMillis())
+                        else if (file.exists() && !file.delete()) throw IOException("workspace_share_cleanup_failed: $file")
+                    } catch (cleanup: Throwable) {
+                        failure?.addSuppressed(cleanup) ?: throw cleanup
+                    } finally { activeShares -= file }
+                }
+            }
+        }
+    }
+
     suspend fun openDocument(root: String, path: String, mode: Int) =
         documents(listOf(root)) { repository.openDocument(root, path, mode) }
 

@@ -188,8 +188,10 @@ gap 小于一天取整数 h，达到一天取整数 d；助手、工具和应用
 HTTP 成功但无图片为 `invalid_result`，本地保存失败为 `persistence_error`。Provider 失败分类见下一节。
 
 `inspect_attachments` 使用独立捕获的识图模型，不要求主模型缺少视觉能力或会话已经包含图片。
-`attachments` 为 1–4 个 `/upload/<file>`，顺序和重复项对应保留；`request` 说明所需事实和输出形式。
-不接受 UUID、HTTP(S)、file URI、裸文件名或 Workspace 路径，不要求当前分支引用。
+工具定位为附件识别，当前支持图片。`attachments` 为 1–4 个 `/upload/<file>` 或 HTTP(S) 附件 URL，顺序和重复项保留；`request` 说明所需事实和输出形式。
+HTTP(S) 可使用百分号编码的 userinfo 提供 Basic 凭据；必须指向实际附件，目录或 HTML 不作为图片。
+不接受 UUID、file URI、裸文件名或猜测的 Workspace 路径，不要求当前分支引用。
+网络失败返回简短 detail（输入序号及 HTTP 状态或网络异常），不回显认证信息；跨源重定向不携带凭据。
 识图模型只接收固定 System、按序 `[Image N path=...]` 与图片、最后的 request，不携带主会话历史。
 成功返回普通 Text，不回传图片字节；空输出为 `inspection_failed`。
 

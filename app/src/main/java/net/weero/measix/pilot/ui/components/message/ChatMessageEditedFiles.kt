@@ -210,34 +210,24 @@ internal fun EditedFilesList(
                         val p = selectedPath ?: return@Card
                         selectedPath = null
                         scope.launch {
-                            var pendingFile: File? = null
                             try {
                                 val (area, relativePath) = resolveWorkspacePath(p)
-                                val file = withContext(Dispatchers.IO) {
-                                    val dir = File(context.cacheDir, "workspace_share")
-                                    check(dir.isDirectory || dir.mkdirs()) { "Unable to create share directory: $dir" }
-                                    File(dir, "${java.util.UUID.randomUUID()}_${p.substringAfterLast('/')}").also { file ->
-                                        pendingFile = file
-                                        file.outputStream().use { output -> workspaceApplicationService.exportFile(workspaceId, area, relativePath, output) }
+                                workspaceApplicationService.shareFile(workspaceId, area, relativePath, p.substringAfterLast('/')) { file ->
+                                    val uri = FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        file,
+                                    )
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/octet-stream"
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
+                                    context.startActivity(Intent.createChooser(intent, null))
                                 }
-                                val uri = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "application/octet-stream"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(Intent.createChooser(intent, null))
-                                pendingFile = null
                             } catch (cancelled: CancellationException) {
-                                pendingFile?.let { if (it.exists() && !it.delete()) cancelled.addSuppressed(java.io.IOException("Unable to delete partial share: $it")) }
                                 throw cancelled
                             } catch (error: Exception) {
-                                pendingFile?.let { if (it.exists() && !it.delete()) error.addSuppressed(java.io.IOException("Unable to delete partial share: $it")) }
                                 reportFailure(error)
                             }
                         }

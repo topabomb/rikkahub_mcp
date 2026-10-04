@@ -5,6 +5,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FileTextFormatTest {
+    @Test fun `long line layout guard covers paste and joined lines without affecting ordinary multiline edits`() {
+        val multiline = ("a".repeat(80) + "\n").repeat(10000)
+        assertFalse(hasLongFileLine(multiline))
+        assertFalse(replacementHasLongFileLine(multiline, 5, 6, "b", 0, 1))
+        assertTrue(replacementHasLongFileLine("short", 0, 5, "x".repeat(1900000), 0, 1900000))
+        val joined = "a".repeat(3000) + "\n" + "b".repeat(3000)
+        assertTrue(replacementHasLongFileLine(joined, 3000, 3001, "", 0, 0))
+        assertFalse(replacementHasLongFileLine("short", 0, 5, multiline, 0, multiline.length))
+        assertFalse(hasLongFileLine("a".repeat(4096)))
+        assertTrue(hasLongFileLine("a".repeat(4097)))
+    }
+
+    @Test fun `line numbers count logical lines including empty final line`() {
+        assertArrayEquals(intArrayOf(0), fileLineStarts(""))
+        assertArrayEquals(intArrayOf(0, 3, 4, 7), fileLineStarts("ab\n\n中x\n"))
+        assertArrayEquals(intArrayOf(0, 3), fileLineStarts("a\r\nb"))
+        assertArrayEquals(intArrayOf(0), fileLineStarts("a".repeat(150_000)))
+    }
+
     @Test fun `common source and configuration files have one classification with supported grammars`() {
         val cases = mapOf("page.HTML" to "xml", "page.htm" to "xml", "data.json" to "json",
             "config.jsonc" to "json", "view.xml" to "xml", "server.py" to "python",

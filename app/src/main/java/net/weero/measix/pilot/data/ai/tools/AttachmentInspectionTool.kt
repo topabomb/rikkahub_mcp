@@ -43,7 +43,7 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
 /**
  * `inspect_attachments`：按需读取附件内容的 Runtime capability tool。
  *
- * - 接受 /upload 图片文件路径，1..4 个，输入顺序即识别/比较顺序；
+ * - 接受 /upload 图片文件路径或 HTTP(S) 图片 URL，1..4 个，输入顺序即识别/比较顺序；
  * - 附件解析统一走 [ToolExecutionContext.resolveAttachments]（单一解析规则），
  *   工具不接触会话消息快照；
  * - 一次附件识别模型调用提供全部图片（多图比较无歧义的内部标签）；
@@ -83,7 +83,7 @@ internal fun createAttachmentInspectionTool(
                                     put("type", "string")
                                     put(
                                         "description",
-                                        "Exact image file path: /upload/<file>.",
+                                        "Exact /upload/<file> path or HTTP(S) attachment URL. Currently supports images. Basic authentication may be supplied as http(s)://username:password@host/path (percent-encode reserved characters). Use an image file, not a directory; never guess a local path.",
                                     )
                                 },
                             )
@@ -91,7 +91,7 @@ internal fun createAttachmentInspectionTool(
                             put("maxItems", MAX_INSPECTION_ATTACHMENTS)
                             put(
                                 "description",
-                                "Image file paths from the user's request, [Attachment path=...] markers, " +
+                                "Attachment URLs or file paths from the user's request, [Attachment path=...] markers, " +
                                     "tool result file.path, or artifacts[].path. " +
                                     "Files need not have appeared as images in this chat. " +
                                     "Up to 4; order is preserved. Does not require a workspace.",
@@ -136,35 +136,18 @@ internal suspend fun executeInspection(
     providerManager: ProviderManager,
     resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
 ): List<UIMessagePart> {
-    val obj = args as? JsonObject
-        ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    val paths = (obj["attachments"] as? JsonArray)?.let { array ->
-        if (array.any { element ->
-                val primitive = element as? JsonPrimitive
-                primitive?.isString != true || primitive.content.trim().isEmpty()
-            }
-        ) {
-            null
-        } else {
-            array.map { (it as JsonPrimitive).content.trim() }
-        }
+    inspectionArgumentError(args)?.let {
+        return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS, it)
     }
-        ?: return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    if (paths.any { LocalToolPath.parseUploadToolPath(it) == null }) {
-        return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    }
-    val request = (obj["request"] as? JsonPrimitive)
-        ?.takeIf(JsonPrimitive::isString)
-        ?.content
-        ?.trim()
-        .orEmpty()
-    if (paths.isEmpty() || paths.size > MAX_INSPECTION_ATTACHMENTS || request.isEmpty()) {
-        return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
-    }
+    val obj = args as JsonObject
+    val paths = (obj.getValue("attachments") as JsonArray).map { (it as JsonPrimitive).content.trim() }
+    val request = (obj.getValue("request") as JsonPrimitive).content.trim()
 
     // 单一解析规则：paths → Runtime resolver → parts；失败 reason 原样透传。
     val resolution = resolveAttachments(paths)
-    resolution.failureReason?.let { return inspectionFailure(it) }
+    resolution.failureReason?.let { reason ->
+        return inspectionFailure(reason, resolution.failureDetail)
+    }
     val images = resolution.parts.filterIsInstance<UIMessagePart.Image>()
     if (images.size != paths.size) {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS)
@@ -172,7 +155,7 @@ internal suspend fun executeInspection(
 
     val userParts = buildList {
         images.forEachIndexed { index, image ->
-            add(UIMessagePart.Text(imageLabel(index, paths[index])))
+            add(UIMessagePart.Text(imageLabel(index, if (LocalToolPath.parseUploadToolPath(paths[index]) != null) paths[index] else "remote attachment ${index + 1}")))
             add(image)
         }
         add(UIMessagePart.Text(request))
@@ -220,6 +203,30 @@ internal suspend fun executeInspection(
             detail = classified.detail.takeIf { it.isNotBlank() },
         )
     }
+}
+
+/** Validation reports positions and input kinds without echoing URLs, credentials or private paths. */
+internal fun inspectionArgumentError(args: kotlinx.serialization.json.JsonElement): String? {
+    val obj = args as? JsonObject ?: return "Expected an object with attachments and request."
+    val array = obj["attachments"] as? JsonArray
+        ?: return "attachments must be an array of 1 to 4 /upload/<file> paths or HTTP(S) URLs."
+    if (array.size !in 1..MAX_INSPECTION_ATTACHMENTS) return "attachments must contain 1 to 4 attachment references; received ${array.size}."
+    val errors = array.mapIndexedNotNull { index, element ->
+        val value = (element as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+        val error = when {
+            value.isNullOrEmpty() -> "must be a non-empty string"
+            value.startsWith("http://", true) || value.startsWith("https://", true) ->
+                if (net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher.parseHttpUrl(value) == null) "invalid HTTP(S) URL" else null
+            value.startsWith("/workspace/") -> "workspace paths are not local attachments; use the actual HTTP(S) attachment URL or an existing /upload/<file>"
+            LocalToolPath.parseUploadToolPath(value) == null -> "expected an HTTP(S) attachment URL or an existing /upload/<file>"
+            else -> null
+        }
+        error?.let { "attachments[$index]: $it." }
+    }
+    if (errors.isNotEmpty()) return errors.joinToString(" ")
+    val request = obj["request"] as? JsonPrimitive
+    if (request?.isString != true || request.content.isBlank()) return "request must be a non-empty string describing what to inspect."
+    return null
 }
 
 /** 多图输入的内部标签，保证跨图比较无歧义。 */

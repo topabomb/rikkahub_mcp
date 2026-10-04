@@ -41,12 +41,12 @@ class AttachmentResolverTest {
     fun tearDownEncoder() = unmockkStatic(::encodeImageBytes)
 
     @Test
-    fun `only upload paths and one to four images are inspection inputs`() = runTest {
+    fun `invalid references and counts are rejected before owner access`() = runTest {
         val invalid = listOf(
             emptyList(),
             List(5) { "/upload/image.png" },
             listOf("attachment:11111111-1111-1111-1111-111111111111"),
-            listOf("https://example.test/image.png"),
+            listOf("ftp://example.test/image.png"),
             listOf("file:///upload/image.png"),
             listOf("/workspace/image.png"),
             listOf("/upload/../secret.png"),
@@ -56,11 +56,23 @@ class AttachmentResolverTest {
         )
         for (paths in invalid) {
             assertEquals(
-                AttachmentResolveResult.Failure(AttachmentFailureReasons.INVALID_ATTACHMENTS),
-                resolver.readImages(ConfigurationScope.Personal, paths),
+                AttachmentFailureReasons.INVALID_ATTACHMENTS,
+                (resolver.readImages(ConfigurationScope.Personal, paths) as AttachmentResolveResult.Failure).reason,
             )
         }
         coVerify(exactly = 0) { store.withUploadImages<AttachmentResolveResult>(ConfigurationScope.Personal, any(), any()) }
+    }
+
+    @Test fun `remote snapshots use fetched bytes and indexed short errors`() = runTest {
+        val fetcher = mockk<SafeRemoteMediaFetcher>()
+        val remote = AttachmentResolver(store, fetcher)
+        coEvery { fetcher.fetch("https://user:pass@example.test/a.png", true) } returns RemoteMediaFetchResult.Success(TINY_PNG, "image/png", "a.png")
+        val result = remote.readImages(ConfigurationScope.Personal, listOf("https://user:pass@example.test/a.png")) as AttachmentResolveResult.Success
+        assertTrue(result.parts.single().url.startsWith("data:image/"))
+        coEvery { fetcher.fetch(any(), true) } returns RemoteMediaFetchResult.Failure(AttachmentFailureReasons.ATTACHMENT_FETCH_FAILED, "HTTP 401: authentication required")
+        val failure = remote.readImages(ConfigurationScope.Personal, listOf("https://example.test/a.png")) as AttachmentResolveResult.Failure
+        assertEquals("attachments[0]: HTTP 401: authentication required.", failure.detail)
+        coVerify(exactly = 0) { store.withUploadImages<AttachmentResolveResult>(any(), any(), any()) }
     }
 
     @Test

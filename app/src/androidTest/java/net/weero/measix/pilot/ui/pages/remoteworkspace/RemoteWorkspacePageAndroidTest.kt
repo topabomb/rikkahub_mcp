@@ -158,6 +158,41 @@ class RemoteWorkspacePageAndroidTest {
         }
     }
 
+    @Test fun compactSourcePreviewShowsOptionalLogicalLineNumbers() {
+        val f = Fixture()
+        val source = file.copy(path = "data.json")
+        val body = (1..100).joinToString("\n") { "  \"item$it\": \"value\"," }
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(source), null, null)
+        coEvery { f.service.readText(f.handle, source) } returns RemoteTextDocument(source, WorkspaceText(body, false, "\n"))
+        f.show()
+        compose.onNodeWithText(source.name).performClick()
+        compose.onNodeWithText(text(R.string.file_line_numbers)).performClick()
+        capture("compact-source-line-numbers.png")
+        onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+            if (error != null) throw error
+            assertTrue((view as EditText).paddingLeft > 0)
+            assertEquals(body, view.text.toString())
+        }
+    }
+
+    @Test fun pullRefreshWorksOnEmptyDirectoryAndKeepsVisibleFilesWhileLoading() {
+        val f = Fixture()
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", emptyList(), null, null)
+        f.show()
+        compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isEmpty() == true }
+        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file), null, null)
+        compose.onNodeWithTag("remote-file-list").performTouchInput { swipeDown(startY = 10f, endY = height - 10f, durationMillis = 600) }
+        compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isNotEmpty() == true }
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.service.list(f.handle, "") } coAnswers { release.await(); RemoteDirectory("", listOf(file), null, null) }
+        compose.onNodeWithTag("remote-file-list").performTouchInput { swipeDown(startY = 10f, endY = height - 10f, durationMillis = 600) }
+        compose.waitUntil(5_000) { f.vm.state.value.loading }
+        compose.onNodeWithText(file.name).assertIsDisplayed()
+        capture("remote-pull-refresh-retains-files.png")
+        release.complete(Unit)
+        compose.waitUntil(5_000) { !f.vm.state.value.loading }
+    }
+
     @Test fun browseFilterCreateAndWorkspaceDetailsRemainAvailableWithoutMcp() {
         val f = Fixture()
         val folder = RemoteFile("reports", true, null, null, null)
@@ -569,10 +604,10 @@ class RemoteWorkspacePageAndroidTest {
             compose.onNodeWithText("1 / 2").assertIsDisplayed()
             compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).assertDoesNotExist()
             coVerifyOrder { f.service.previewCopy(f.handle, pdf); f.service.refresh(f.selection); f.service.previewCopy(f.handle, pdf) }
-            verify(exactly = 1) { f.service.releaseCopyLater(broken) }
+            coVerify(exactly = 1) { f.service.releaseCopy(broken) }
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
             compose.waitForIdle()
-            verify(exactly = 1) { f.service.releaseCopyLater(valid) }
+            coVerify(exactly = 1) { f.service.releaseCopy(valid) }
         } finally { broken.delete(); valid.delete() }
     }
 

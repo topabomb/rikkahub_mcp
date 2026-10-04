@@ -199,7 +199,7 @@ class ArchitectureDependencyTest {
             lookupOwners.contains("service/ConversationAttachmentPreviewProjector.kt"),
         )
         val resolver = File(architectureSourceRoot, "data/ai/attachments/AttachmentResolver.kt").readText()
-        listOf("AttachmentReferenceLookup", "ConversationRepository", "masterMessages", "Workspace", "SafeRemoteMediaFetcher")
+        listOf("AttachmentReferenceLookup", "ConversationRepository", "masterMessages", "Workspace")
             .forEach { dependency -> assertFalse("path reads must not depend on $dependency", resolver.contains(dependency)) }
         assertNoHits("AttachmentRefs.walkMessageParts", sourcesUnder("ui/components/message/"))
         assertNoHits("resolveAttachmentPreviewUrl")

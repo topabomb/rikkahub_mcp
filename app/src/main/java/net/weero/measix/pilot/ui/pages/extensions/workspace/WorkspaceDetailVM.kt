@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.UUID
 import java.io.InputStream
 import java.io.OutputStream
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
@@ -43,6 +42,9 @@ class WorkspaceDetailVM(
     private val _exportState = MutableStateFlow<WorkspaceExportState?>(null)
     val exportState = _exportState.asStateFlow()
     private var exportJob: Job? = null
+    private var refreshJob: Job? = null
+    private var refreshTarget: Pair<WorkspaceStorageArea, String>? = null
+    private var refreshRevision = 0L
 
     fun exportFiles(request: WorkspaceExportRequest, destination: WorkspaceExportDestination) {
         if (exportJob?.isActive == true) return
@@ -77,7 +79,7 @@ class WorkspaceDetailVM(
 
     init {
         viewModelScope.launch {
-            if (loadWorkspaceNow()) refreshNow()
+            if (loadWorkspaceNow()) refresh()
         }
     }
 
@@ -114,9 +116,16 @@ class WorkspaceDetailVM(
         refresh()
     }
 
-    fun refresh() {
-        viewModelScope.launch {
-            refreshNow()
+    fun refresh() = refreshFiles(force = false)
+
+    private fun refreshFiles(force: Boolean) {
+        val target = state.value.area to state.value.path
+        if (!force && refreshJob?.isActive == true && refreshTarget == target) return
+        refreshJob?.cancel()
+        refreshTarget = target
+        val revision = ++refreshRevision
+        refreshJob = viewModelScope.launch {
+            refreshNow(revision)
         }
     }
 
@@ -128,7 +137,7 @@ class WorkspaceDetailVM(
             recursive = entry.isDirectory,
         )
         // 删除已经提交后，列表刷新是独立的读模型同步；不要让刷新取消把已提交删除误报为失败。
-        refresh()
+        refreshFiles(force = true)
         if (!deleted) {
             _state.update { it.copy(error = WorkspaceOperation.DELETE) }
         }
@@ -140,19 +149,19 @@ class WorkspaceDetailVM(
         false
     }
 
-    private suspend fun refreshNow() {
+    private suspend fun refreshNow(revision: Long) {
         val target = state.value
         _state.update { it.copy(loading = true, error = null, diagnostic = null) }
         try {
             val entries = workspaceQueryService.listFiles(id, target.area, target.path)
-            _state.update { if (it.area == target.area && it.path == target.path) it.copy(entries = entries) else it }
+            _state.update { if (revision == refreshRevision && it.area == target.area && it.path == target.path) it.copy(entries = entries) else it }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
             android.util.Log.e("WorkspaceDetail", "Unable to list files", error)
-            _state.update { if (it.area == target.area && it.path == target.path)
-                it.copy(entries = emptyList(), error = WorkspaceOperation.LOAD_FILES, diagnostic = error.userVisibleDiagnostic()) else it }
+            _state.update { if (revision == refreshRevision && it.area == target.area && it.path == target.path)
+                it.copy(error = WorkspaceOperation.LOAD_FILES, diagnostic = error.userVisibleDiagnostic()) else it }
         } finally {
-            _state.update { if (it.area == target.area && it.path == target.path) it.copy(loading = false) else it }
+            _state.update { if (revision == refreshRevision && it.area == target.area && it.path == target.path) it.copy(loading = false) else it }
         }
     }
 
@@ -168,7 +177,7 @@ class WorkspaceDetailVM(
                         input = input,
                     )
                 }
-                refresh()
+                refreshFiles(force = true)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -187,32 +196,13 @@ class WorkspaceDetailVM(
      * 把当前区域下的文件导出到 cacheDir 的临时文件, 完成后回调 [onReady].
      * 供分享 / 图片预览 / 交给系统应用打开等复用 (它们都需要一个 FileProvider 可访问的真实 File).
      */
-    fun exportToCacheFile(entry: WorkspaceFileEntry, cacheDir: File, onReady: (File) -> Unit) {
+    fun exportToCacheFile(entry: WorkspaceFileEntry, onReady: (File) -> Unit) {
         val area = state.value.area
         viewModelScope.launch {
-            var file: File? = null
             try {
-                val dir = File(cacheDir, "workspace_share").apply { mkdirs() }
-                val safeName = File(entry.name).name.ifBlank { "workspace-file" }
-                val exported = File(dir, "${UUID.randomUUID()}_$safeName")
-                file = exported
-                exported.outputStream().use { output ->
-                    workspaceApplicationService.exportFile(
-                        workspaceId = id,
-                        area = area,
-                        path = entry.path,
-                        output = output,
-                    )
-                }
-                onReady(exported)
-                file = null
-            } catch (cancelled: CancellationException) {
-                file?.let { if (it.exists() && !it.delete()) cancelled.addSuppressed(java.io.IOException("Unable to delete partial share file: $it")) }
-                throw cancelled
-            } catch (error: Exception) {
-                file?.let { if (it.exists() && !it.delete()) error.addSuppressed(java.io.IOException("Unable to delete partial share file: $it")) }
-                reportExportFailure(error)
-            }
+                workspaceApplicationService.shareFile(id, area, entry.path, entry.name, onReady)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportExportFailure(error) }
         }
     }
 
@@ -239,7 +229,7 @@ class WorkspaceDetailVM(
                 workspaceApplicationService.installRootfs(workspace.id, url) { progress ->
                     _installProgress.value = progress
                 }
-                if (loadWorkspaceNow()) refreshNow()
+                if (loadWorkspaceNow()) refreshFiles(force = true)
             } catch (e: CancellationException) {
                 throw e
             } catch (error: Exception) {

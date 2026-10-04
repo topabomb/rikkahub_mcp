@@ -30,7 +30,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.activity.compose.BackHandler
@@ -46,8 +45,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -99,9 +96,6 @@ private fun WorkspaceFileEditorContent(
     val toaster = LocalToaster.current
     val navController = LocalNavController.current
     val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
-    val compactToolbar = with(density) { LocalWindowInfo.current.containerSize.height.toDp() < 480.dp } ||
-        WindowInsets.ime.getBottom(density) > 0
     val editable = area == WorkspaceStorageArea.FILES
     val fileName = path.substringAfterLast('/').ifBlank { path }
 
@@ -235,6 +229,7 @@ private fun WorkspaceFileEditorContent(
                 title = {
                     Text(
                         text = fileName,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -300,7 +295,7 @@ private fun WorkspaceFileEditorContent(
                     }
                 },
                 colors = CustomColors.topBarColors,
-                expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
+                expandedHeight = 48.dp,
             )
         },
         containerColor = CustomColors.topBarColors.containerColor,

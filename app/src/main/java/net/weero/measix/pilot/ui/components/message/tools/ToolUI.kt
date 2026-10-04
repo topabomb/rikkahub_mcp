@@ -105,7 +105,7 @@ interface ToolUIRenderer {
     /** 折叠步骤的标题 */
     @Composable
     fun title(context: ToolUIContext): String =
-        stringResource(R.string.chat_message_tool_call_generic, displayName(context))
+        stringResource(R.string.chat_message_tool_call_generic, localizedToolName(displayName(context)))
 
     /** 步骤展开时是否显示内联摘要 */
     fun hasSummary(context: ToolUIContext): Boolean = false
@@ -159,6 +159,38 @@ object ToolUIRegistry {
 
     /** 查找工具对应的渲染器, 未注册时返回默认渲染器 */
     fun resolve(toolName: String): ToolUIRenderer = renderers[toolName] ?: DefaultToolUIRenderer
+}
+
+@Composable
+internal fun localizedToolName(name: String): String = builtinToolNameResource(name)?.let { stringResource(it) } ?: name
+
+internal fun builtinToolNameResource(name: String): Int? = when (name) {
+    "memory_tool" -> R.string.assistant_page_manage_memory_title
+    "search_web" -> R.string.built_in_search_title
+    "scrape_web" -> R.string.chat_message_tool_scrape_web
+    "get_time_info" -> R.string.chat_message_tool_get_time
+    "clipboard_tool" -> R.string.assistant_page_local_tools_clipboard_title
+    "text_to_speech" -> R.string.assistant_page_local_tools_tts_title
+    "use_skill" -> R.string.skills_page_title
+    "recent_chats" -> R.string.chat_message_tool_recent_chats
+    "conversation_search" -> R.string.search_page_title
+    "get_screen_time" -> R.string.chat_message_tool_screen_time
+    "calendar_query" -> R.string.chat_message_tool_calendar_query
+    "calendar_create" -> R.string.assistant_page_local_tools_calendar_title
+    "workspace_read_file" -> R.string.tool_ui_read_file_default
+    "workspace_write_file" -> R.string.tool_ui_write_file_default
+    "workspace_edit_file" -> R.string.tool_ui_edit_file_default
+    "workspace_shell" -> R.string.workspace_detail_tool_shell
+    "generate_image" -> R.string.assistant_page_local_tools_text_to_image_title
+    "inspect_attachments" -> R.string.chat_message_tool_inspect_attachments_title
+    "ask_user" -> R.string.assistant_page_local_tools_ask_user_title
+    "eval_javascript" -> R.string.assistant_page_local_tools_javascript_engine_title
+    "assistant_manage" -> R.string.assistant_page_local_tools_assistant_management_title
+    "assistant_inspect" -> R.string.chat_message_tool_inspect_assistant
+    "assistant_call" -> R.string.assistant_page_local_tools_assistant_delegation_title
+    "read_tool_output" -> R.string.chat_message_tool_read_trimmed_result
+    "grep_tool_output" -> R.string.chat_message_tool_search_trimmed_result
+    else -> null
 }
 
 /** Business identity comes only from committed client-safe metadata, including after output archiving. */

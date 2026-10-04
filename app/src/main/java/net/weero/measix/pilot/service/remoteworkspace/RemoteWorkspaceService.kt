@@ -412,35 +412,33 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    suspend fun previewCopy(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = WorkspaceFileRules.PREVIEW_LIMIT): File =
-        operation(handle) { token ->
+    suspend fun previewCopy(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = WorkspaceFileRules.PREVIEW_LIMIT): File {
+        var owned: File? = null
+        return operation(handle, onFailure = { error ->
+            withContext(NonCancellable + Dispatchers.IO) {
+                owned?.let { copy ->
+                    if (copy.exists() && !copy.delete()) error.addSuppressed(IOException("workspace_temporary_cleanup_failed: $copy"))
+                    synchronized(monitor) { if (!copy.exists()) copies -= copy }
+                }
+            }
+        }) { token ->
             withContext(Dispatchers.IO) {
                 temporaryRoot.mkdirs()
                 val copy = File(temporaryRoot, "preview-${handle.id}-${Uuid.random()}")
+                owned = copy
                 synchronized(monitor) { copies[copy] = handle }
-                try {
-                    withOutput(copy::outputStream) { client.download(handle.connection, token, handle.space, file.path, it, maxBytes) }
-                    validate(handle)
-                    copy
-                } catch (error: Throwable) {
-                    if (copy.exists() && !copy.delete()) error.addSuppressed(IOException("workspace_temporary_cleanup_failed: $copy"))
-                    synchronized(monitor) { if (!copy.exists()) copies -= copy }
-                    throw error
-                }
+                withOutput(copy::outputStream) { client.download(handle.connection, token, handle.space, file.path, it, maxBytes) }
+                validate(handle)
+                copy
             }
         }
+    }
 
     suspend fun releaseCopy(copy: File) = withContext(Dispatchers.IO) {
         require(copy.parentFile?.canonicalFile == temporaryRoot.canonicalFile && copy.name.startsWith("preview-"))
         if (copy.exists() && !copy.delete()) throw IOException("workspace_temporary_cleanup_failed: $copy")
         synchronized(monitor) { copies -= copy }
     }
-
-    fun releaseCopyLater(copy: File) { scope.launch {
-        try { releaseCopy(copy) }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { android.util.Log.e("RemoteWorkspace", "Preview cleanup failed", error) }
-    } }
 
     /** The callback is the system handoff boundary; returned shares remain readable for 24 hours. */
     suspend fun share(handle: RemoteWorkspaceHandle, file: RemoteFile, deliver: (File) -> Unit) {

@@ -45,6 +45,14 @@ import org.junit.Before
 import org.junit.Test
 
 class AttachmentInspectionToolTest {
+    @Test fun `remote attachments accept Basic URLs and guessed local paths fail concisely`() {
+        org.junit.Assert.assertNull(inspectionArgumentError(args(listOf("http://user:password@example.com/image.png", "https://example.com/a.png"))))
+        val error = requireNotNull(inspectionArgumentError(args(listOf("/workspace/guessed.png"))))
+        assertTrue(error.contains("attachments[0]"))
+        assertFalse(error.contains("guessed.png"))
+    }
+
+
     private val providerManager = mockk<ProviderManager>()
     private val provider = mockk<Provider<ProviderSetting>>()
 
@@ -164,10 +172,10 @@ class AttachmentInspectionToolTest {
     }
 
     @Test
-    fun `non attachment refs are invalid`() = runTest {
+    fun `unsupported URI schemes are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
-            args = args(listOf("https://example.com/a.png")),
+            args = args(listOf("ftp://example.com/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
             resolveAttachments = { error("resolver must not run") },

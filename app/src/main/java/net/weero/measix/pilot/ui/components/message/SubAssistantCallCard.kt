@@ -562,19 +562,9 @@ internal fun sanitizeToolNameForDisplay(name: String, fallback: String): String 
 }
 
 @Composable
-private fun localizeActiveToolName(name: String): String = when (name) {
-    "get_time_info" -> stringResource(R.string.chat_message_tool_get_time)
-    "text_to_speech" -> stringResource(R.string.assistant_page_local_tools_tts_title)
-    "ask_user" -> stringResource(R.string.assistant_page_local_tools_ask_user_title)
-    "get_screen_time" -> stringResource(R.string.chat_message_tool_screen_time)
-    "clipboard_tool" -> stringResource(R.string.assistant_page_local_tools_clipboard_title)
-    "calendar_query", "calendar_create" -> stringResource(R.string.assistant_page_local_tools_calendar_title)
-    "eval_javascript" -> stringResource(R.string.assistant_page_local_tools_javascript_engine_title)
-    else -> sanitizeToolNameForDisplay(
-        name = name,
-        fallback = stringResource(R.string.sub_assistant_tool_unknown),
-    )
-}
+private fun localizeActiveToolName(name: String): String =
+    net.weero.measix.pilot.ui.components.message.tools.builtinToolNameResource(name)?.let { stringResource(it) }
+        ?: sanitizeToolNameForDisplay(name, stringResource(R.string.sub_assistant_tool_unknown))
 
 // ---- 本地化辅助 ----
 

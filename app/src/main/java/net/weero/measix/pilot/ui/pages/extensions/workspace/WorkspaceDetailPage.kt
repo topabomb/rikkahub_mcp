@@ -51,7 +51,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -72,7 +72,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -141,10 +140,12 @@ fun WorkspaceDetailPage(id: String) {
     var selectedFiles by remember(id, state.area, state.path) { mutableStateOf(emptySet<String>()) }
     var pendingBatch by remember(id) { mutableStateOf<WorkspaceExportRequest?>(null) }
     val pagerState = rememberPagerState { 2 }
+    LaunchedEffect(state.entries) {
+        selectedFiles = selectedFiles.intersect(state.entries.filterNot { it.isDirectory }.map { it.path }.toSet())
+    }
     LaunchedEffect(pagerState.currentPage) {
         if (pagerState.currentPage == 0) selectedFiles = emptySet()
     }
-    val compactToolbar = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() < 480.dp }
     val scope = rememberCoroutineScope()
     var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
     var showInstallDialog by remember { mutableStateOf(false) }
@@ -240,7 +241,7 @@ fun WorkspaceDetailPage(id: String) {
                     }
                 },
                 colors = CustomColors.topBarColors,
-                expandedHeight = if (compactToolbar) 48.dp else TopAppBarDefaults.TopAppBarExpandedHeight,
+                expandedHeight = 48.dp,
             )
         },
         bottomBar = {
@@ -277,6 +278,7 @@ fun WorkspaceDetailPage(id: String) {
 
                 1 -> WorkspaceFilesPage(
                     state = state,
+                    onRefresh = vm::refresh,
                     selected = selectedFiles,
                     onToggleSelection = { entry ->
                         if (!entry.isDirectory) selectedFiles = if (entry.path in selectedFiles)
@@ -299,7 +301,7 @@ fun WorkspaceDetailPage(id: String) {
                                     previewImage = WorkspaceImagePreview(entry, state.area, vm.imageSource(entry, state.area))
                                 }
 
-                                FileType.OTHER -> vm.exportToCacheFile(entry, context.cacheDir) { file ->
+                                FileType.OTHER -> vm.exportToCacheFile(entry) { file ->
                                     val uri = FileProvider.getUriForFile(
                                         context,
                                         "${context.packageName}.fileprovider",
@@ -312,9 +314,7 @@ fun WorkspaceDetailPage(id: String) {
                                         setDataAndType(uri, mime)
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
-                                    runCatching {
-                                        context.startActivity(Intent.createChooser(intent, null))
-                                    }
+                                    context.startActivity(Intent.createChooser(intent, null))
                                 }
                             }
                         }
@@ -325,7 +325,7 @@ fun WorkspaceDetailPage(id: String) {
                         exportLauncher.launch(entry.name)
                     },
                     onShare = { entry ->
-                        vm.exportToCacheFile(entry, context.cacheDir) { file ->
+                        vm.exportToCacheFile(entry) { file ->
                             val uri = FileProvider.getUriForFile(
                                 context,
                                 "${context.packageName}.fileprovider",
@@ -720,9 +720,11 @@ private fun InstallRootfsDialog(
     )
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkspaceFilesPage(
     state: WorkspaceDetailState,
+    onRefresh: () -> Unit,
     selected: Set<String>,
     onToggleSelection: (WorkspaceFileEntry) -> Unit,
     imageSource: (WorkspaceFileEntry, WorkspaceStorageArea) -> ImageSource,
@@ -734,49 +736,53 @@ private fun WorkspaceFilesPage(
     onExport: (WorkspaceFileEntry) -> Unit,
     onShare: (WorkspaceFileEntry) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = contentPadding + PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        item {
-            BoxWithConstraints(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                val wide = maxWidth >= 600.dp && LocalDensity.current.fontScale < 1.3f
-                if (wide) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    WorkspaceAreaSelector(state.area, onSelectArea, Modifier.width(280.dp))
-                    WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp, Modifier.weight(1f))
-                } else Column {
-                    WorkspaceAreaSelector(state.area, onSelectArea)
-                    WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp)
+    PullToRefreshBox(isRefreshing = state.loading, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+        androidx.compose.runtime.key(state.area, state.path) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = contentPadding + PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                item {
+                    BoxWithConstraints(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        val wide = maxWidth >= 600.dp && LocalDensity.current.fontScale < 1.3f
+                        if (wide) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            WorkspaceAreaSelector(state.area, onSelectArea, Modifier.width(280.dp))
+                            WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp, Modifier.weight(1f))
+                        } else Column {
+                            WorkspaceAreaSelector(state.area, onSelectArea)
+                            WorkspacePathBar(state.path, state.path.isNotBlank(), onGoUp)
+                        }
+                    }
+                }
+
+                state.error?.let { error ->
+                    item {
+                        ErrorCard(state.diagnostic ?: workspaceErrorMessage(error))
+                    }
+                }
+
+                if (!state.loading && state.entries.isEmpty() && state.error == null) {
+                    item {
+                        EmptyDirectoryState()
+                    }
+                }
+
+                items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
+                    WorkspaceFileCard(
+                        entry = entry,
+                        selected = entry.path in selected,
+                        selecting = selected.isNotEmpty(),
+                        onSelect = { onToggleSelection(entry) },
+                        image = if (!entry.isDirectory && fileType(entry.name) == FileType.IMAGE) {
+                            remember(entry, state.area, imageSource) { imageSource(entry, state.area) }
+                        } else null,
+                        onOpen = { onOpen(entry) },
+                        onDelete = { onDelete(entry) },
+                        onExport = { onExport(entry) },
+                        onShare = { onShare(entry) },
+                    )
                 }
             }
-        }
-
-        state.error?.let { error ->
-            item {
-                ErrorCard(state.diagnostic ?: workspaceErrorMessage(error))
-            }
-        }
-
-        if (!state.loading && state.entries.isEmpty() && state.error == null) {
-            item {
-                EmptyDirectoryState()
-            }
-        }
-
-        items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
-            WorkspaceFileCard(
-                entry = entry,
-                selected = entry.path in selected,
-                selecting = selected.isNotEmpty(),
-                onSelect = { onToggleSelection(entry) },
-                image = if (!entry.isDirectory && fileType(entry.name) == FileType.IMAGE) {
-                    remember(entry, state.area, imageSource) { imageSource(entry, state.area) }
-                } else null,
-                onOpen = { onOpen(entry) },
-                onDelete = { onDelete(entry) },
-                onExport = { onExport(entry) },
-                onShare = { onShare(entry) },
-            )
         }
     }
 }

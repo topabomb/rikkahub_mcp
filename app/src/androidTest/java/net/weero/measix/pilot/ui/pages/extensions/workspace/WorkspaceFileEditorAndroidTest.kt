@@ -43,6 +43,53 @@ class WorkspaceFileEditorAndroidTest {
         }
     }
 
+    @Test fun lineNumbersAreOptionalAndDoNotChangeLargeTextOrSelection() {
+        val body = "{\"value\":\"" + "a".repeat(1_900_000) + "\"}\n"
+        val query = mockk<WorkspaceQueryService>()
+        val application = mockk<WorkspaceApplicationService>()
+        coEvery { query.readTextForPreview("workspace", WorkspaceStorageArea.FILES, "large.json") } returns WorkspaceTextPreviewResult.Success(body)
+        showPage("large.json", application, query)
+        val label = compose.activity.getString(R.string.file_line_numbers)
+        compose.onNodeWithText(compose.activity.getString(R.string.file_large_plain_text)).assertIsDisplayed()
+        onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+            if (error != null) throw error
+            val editor = view as EditText
+            assertEquals(0, editor.paddingLeft)
+            editor.setSelection(12, 20)
+        }
+        compose.onNodeWithText(label).performClick()
+        onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+            if (error != null) throw error
+            val editor = view as EditText
+            assertTrue(editor.paddingLeft > 0)
+            assertEquals(body, editor.text.toString())
+            assertEquals(12, editor.selectionStart)
+            assertEquals(20, editor.selectionEnd)
+            assertEquals(0, editor.text.getSpans(0, editor.length(), FileSyntaxColorSpan::class.java).size)
+        }
+        compose.onNodeWithText(label).performClick()
+        onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+            if (error != null) throw error
+            assertEquals(0, (view as EditText).paddingLeft)
+            assertEquals(body, view.text.toString())
+        }
+    }
+
+    @Test fun mountedEditorAcceptsLongLineReplacementWithoutLosingDraft() {
+        val query = mockk<WorkspaceQueryService>()
+        val application = mockk<WorkspaceApplicationService>()
+        coEvery { query.readTextForPreview("workspace", WorkspaceStorageArea.FILES, "paste.txt") } returns
+            WorkspaceTextPreviewResult.Success("short")
+        showPage("paste.txt", application, query)
+        compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
+        val body = "a".repeat(1_900_000)
+        onView(isAssignableFrom(EditText::class.java)).perform(replaceText(body), closeSoftKeyboard())
+        onView(isAssignableFrom(EditText::class.java)).check { view, error ->
+            if (error != null) throw error
+            assertEquals(body, (view as EditText).text.toString())
+        }
+    }
+
     @Test fun savedMarkdownCanReturnToRenderedPreviewWithoutReopening() {
         val query = mockk<WorkspaceQueryService>()
         val application = mockk<WorkspaceApplicationService>()

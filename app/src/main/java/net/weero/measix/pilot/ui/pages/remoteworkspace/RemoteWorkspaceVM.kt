@@ -64,6 +64,7 @@ internal class RemoteWorkspaceVM(
     val summary = service.summary
     private var readJob: Job? = null
     private var readRevision = 0L
+    private var readPath: String? = null
     private var work: Job? = null
     private var overwriteAnswer: CompletableDeferred<Boolean>? = null
     // Picker requests survive Activity recreation, but are never serialized or rebound to another handle.
@@ -85,13 +86,18 @@ internal class RemoteWorkspaceVM(
         }
     }
 
-    fun retry() {
+    fun retry() = loadDirectory(force = false)
+
+    private fun loadDirectory(force: Boolean) {
         if (selection == null || _state.value.running) return
+        val path = _state.value.path
+        if (!force && readJob?.isActive == true && readPath == path) return
         readJob?.cancel()
+        readPath = path
         val revision = ++readRevision
         readJob = viewModelScope.launch {
             var acquired: RemoteWorkspaceHandle? = null
-            _state.update { it.copy(loading = true, error = null, directory = null) }
+            _state.update { it.copy(loading = true, error = null) }
             try {
                 if (_state.value.handle != null) service.refresh(selection)
                 val handle = _state.value.handle ?: service.open(selection).also { acquired = it }
@@ -99,7 +105,7 @@ internal class RemoteWorkspaceVM(
                 if (revision != readRevision) return@launch
                 _state.update { it.copy(handle = handle, revoked = false) }
                 acquired = null
-                val directory = service.list(handle, _state.value.path)
+                val directory = service.list(handle, path)
                 if (revision == readRevision && _state.value.handle === handle) _state.update { it.copy(directory = directory) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (revision == readRevision) report(error) }
@@ -175,7 +181,7 @@ internal class RemoteWorkspaceVM(
                 _state.update { if (it.handle !== original) it.copy(running = false, overwrite = null, activeIndex = null)
                     else it.copy(running = false, overwrite = null, activeIndex = null, directory = null,
                         results = retainUnverified(it.results.take(paths.size), unverified)) }
-                if (isActive && _state.value.handle === original) retry()
+                if (isActive && _state.value.handle === original) loadDirectory(force = true)
             }
         }
     }

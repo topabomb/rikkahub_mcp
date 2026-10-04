@@ -1519,7 +1519,7 @@
   <string name="chat_message_tool_inspection">检查附件</string>
   <string name="chat_message_tool_inspection_running">正在检查附件</string>
   <string name="chat_message_tool_inspection_failed">附件检查失败</string>
-  <string name="chat_message_tool_inspection_failed_invalid_arguments">inspect_attachments 参数无效</string>
+  <string name="chat_message_tool_inspection_failed_invalid_arguments">附件识别参数无效</string>
   <string name="chat_message_tool_inspection_failed_attachment">无法解析附件</string>
   <string name="chat_message_tool_inspection_failed_model_unavailable">检查模型不可用</string>
   <string name="chat_message_tool_inspection_failed_rate_limited">已达到附件检查速率限制</string>
@@ -2111,4 +2111,8 @@
   <string name="file_preview_source">源码</string>
   <string name="image_viewer_close_content_description">关闭图片预览</string>
   <string name="image_viewer_load_failed">无法预览图片</string>
+  <string name="file_line_numbers">行号</string>
+  <string name="file_large_plain_text">文本较大，已关闭语法高亮。</string>
+  <string name="chat_message_tool_inspect_assistant">查看助手配置</string>
+  <string name="file_long_lines_no_wrap">内容包含超长行，可横向滑动阅读。</string>
 </resources>

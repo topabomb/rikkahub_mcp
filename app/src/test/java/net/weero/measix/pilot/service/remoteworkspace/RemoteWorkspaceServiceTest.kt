@@ -775,6 +775,26 @@ class RemoteWorkspaceServiceTest {
         f.sessions.awaitPlatformOperations(f.selection.access as RealmAccess.Enterprise)
     }
 
+    @Test fun `preview cancellation at completed download removes unhanded copy`() = runTest {
+        val f = fixture(); val handle = f.service.open(f.selection)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.client.download(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            arg<java.io.OutputStream>(4).write(byteArrayOf(7))
+            entered.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            WorkspaceContentMetadata(file.etag, 1, null)
+        }
+        val reading = async { f.service.previewCopy(handle, file) }
+        entered.await()
+        reading.cancel()
+        release.complete(Unit)
+        reading.join()
+        assertTrue(reading.isCancelled)
+        assertTrue(temporary.root.walkTopDown().none { it.isFile && it.name.startsWith("preview-") })
+        f.service.close(handle)
+    }
+
     @Test fun `a handed off share survives closing its management session`() = runTest {
         val f = fixture(); val handle = f.service.open(f.selection)
         coEvery { f.client.download(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
