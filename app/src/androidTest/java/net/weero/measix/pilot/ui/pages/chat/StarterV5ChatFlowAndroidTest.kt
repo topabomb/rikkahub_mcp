@@ -285,7 +285,10 @@ class StarterV5ChatFlowAndroidTest {
             val answer = transcript.last()
             assertNull("${answer.terminalReason}: ${answer.terminalDetail}", answer.terminalStatus)
             assertEquals(StepOutcome.Final, answer.parts.filterIsInstance<UIMessagePart.Step>().last().outcome)
-            assertEquals(expectedAnswer, answer.toText())
+            val actualAnswer = answer.toText()
+            val allowOuterWhitespace = core && fixture["allowAnswerOuterWhitespace"]?.jsonPrimitive?.booleanOrNull == true
+            assertEquals(expectedAnswer, if (allowOuterWhitespace) actualAnswer.trim() else actualAnswer)
+            File(evidence, "provider-answer.txt").writeText(actualAnswer)
             assertEquals(listOf(prompt), transcript.filter { it.role == MessageRole.USER }.map { it.toText() })
             assertTrue(completed.snapshot.context.messages.values.none { it.updates.isNotEmpty() })
             val durable = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
@@ -317,7 +320,8 @@ class StarterV5ChatFlowAndroidTest {
             val item = details.items.single { ConversationContextCategory.OPENING in it.categories }
             val original = runBlocking { query.contextContent(lease, row.id, answer.id, details.id, item.key).text }
             val originalBlocks = Json.parseToJsonElement(original).jsonObject.getValue("blocks").jsonArray
-            assertEquals(backgrounds, originalBlocks.map { it.jsonObject })
+            assertEquals(backgrounds.map { it.getValue("content").jsonPrimitive.content }, originalBlocks.map { it.jsonPrimitive.content })
+            assertEquals(setOf("type", "blocks"), Json.parseToJsonElement(original).jsonObject.keys)
             val systemItem = details.items.single { ConversationContextCategory.SYSTEM in it.categories }
             val admittedSystem = runBlocking { query.contextContent(lease, row.id, answer.id, details.id, systemItem.key).text }
             assertTrue(admittedSystem.contains(system))

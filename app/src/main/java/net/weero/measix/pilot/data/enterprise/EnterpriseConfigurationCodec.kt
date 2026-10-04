@@ -1,8 +1,18 @@
 package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonTransformingSerializer
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Modality
+
+/** Local stored display metadata may be discarded without losing conversation
+ * content or changing stored bytes/hashes. Never used for network decoding. */
+internal object StoredStarterSerializer : JsonTransformingSerializer<EnterpriseStarter>(EnterpriseStarter.serializer()) {
+    override fun transformDeserialize(element: JsonElement): JsonElement =
+        if (element is JsonObject) JsonObject(element.filterKeys { it != "description" }) else element
+}
 
 /** Stable validation failures cross the application boundary without exposing credential-bearing wire input. */
 internal open class EnterpriseConfigurationException(val reason: String, detail: String? = null) :

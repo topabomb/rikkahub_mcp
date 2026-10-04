@@ -99,7 +99,7 @@ class ConversationContextQueryTest {
             assertEquals(ConversationContextRequestState.SAVED_CONTENT, request.state)
             val item = request.items.single()
             val content = query.contextContent(lease, original.conversationId, user.currentMessage.id, null, item.key)
-            assertEquals(text, content.text)
+            assertEquals(net.weero.measix.pilot.data.ai.request.renderContextModelText(source, text, 1), content.text)
             assertFalse(content.text.contains("Other variant"))
         }
         coVerify(exactly = 0) { artifacts.readContextText(any(), any()) }

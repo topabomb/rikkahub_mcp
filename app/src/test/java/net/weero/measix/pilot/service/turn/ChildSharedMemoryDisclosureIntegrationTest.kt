@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.provider.TextGenerationParams
@@ -134,10 +135,10 @@ class ChildSharedMemoryDisclosureIntegrationTest {
             val finalRequest = parentRequests.last()
             val disclosure = disclosures(finalRequest)
             assertEquals(2, disclosure.size)
-            val update = ConversationDisclosureSnapshotService.readSections(disclosure.last())
-            assertEquals(setOf(DisclosureSection.MEMORY), update.keys)
+            val update = Json.parseToJsonElement(disclosure.last()).jsonObject
+            assertEquals(setOf("type", "memory"), update.keys)
             assertEquals(Json.parseToJsonElement("""[[${initial.id},"written by child"]]"""),
-                update.getValue(DisclosureSection.MEMORY).getValue("rows"))
+                update.getValue("memory").jsonObject.getValue("rows"))
             val delegatedResult = finalRequest.flatMap { it.parts }.filterIsInstance<UIMessagePart.Tool>().single()
             assertEquals("assistant_call", delegatedResult.toolName)
             assertEquals("Child completed.", (delegatedResult.output.single() as UIMessagePart.Text).text)

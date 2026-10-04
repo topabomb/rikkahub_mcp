@@ -58,7 +58,7 @@ class ConversationContextPayloadTest {
             PromptInjection.ModeInjection(content = "raw"), emptyMap()), body = ConversationContextBody.Inline("rendered"))
         val encoded = ConversationContextCodec.encode(payload)
         assertThrows(IllegalArgumentException::class.java) {
-            ConversationContextCodec.decode(encoded.replace("\"version\":1", "\"version\":2"))
+            ConversationContextCodec.decode(encoded.replace("\"version\":1", "\"version\":3"))
         }
         assertThrows(IllegalArgumentException::class.java) {
             ConversationContextCodec.decode(encoded.replace("\"rendererVersion\":1", "\"rendererVersion\":2"))

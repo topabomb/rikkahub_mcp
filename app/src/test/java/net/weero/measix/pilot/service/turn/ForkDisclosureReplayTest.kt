@@ -57,13 +57,15 @@ class ForkDisclosureReplayTest {
                 val text = (entries.last().payload.body as ConversationContextBody.Inline).text
                 assertEquals(Json.parseToJsonElement("[[1,\"A\"]]"),
                     ConversationDisclosureSnapshotService.readSections(text).getValue(DisclosureSection.MEMORY)["rows"])
+                val modelText = net.weero.measix.pilot.data.ai.request.renderContextModelText(
+                    entries.last().payload.source, text, entries.last().payload.version)
                 val sent = f.requests.last()
                 // A new START prefixes its real USER input with a separate context Text part.
                 // The whole USER container therefore also includes the user's question.
                 val notification = sent.indexOfLast { message -> message.role == MessageRole.USER &&
-                    message.parts.any { it is UIMessagePart.Text && it.text == text } }
+                    message.parts.any { it is UIMessagePart.Text && it.text == modelText } }
                 assertTrue("The external state must occur in a USER container", notification >= 0)
-                assertEquals(listOf(text, "continue the fork"),
+                assertEquals(listOf(modelText, "continue the fork"),
                     sent[notification].parts.filterIsInstance<UIMessagePart.Text>().map { it.text })
                 val toolsBefore = sent.take(notification).flatMap { it.parts }.filterIsInstance<UIMessagePart.Tool>()
                 assertEquals(listOf("write"), toolsBefore.map { it.providerCallId })

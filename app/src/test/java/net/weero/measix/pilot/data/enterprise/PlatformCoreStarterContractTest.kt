@@ -20,7 +20,6 @@ class PlatformCoreStarterContractTest {
             assertEquals(original.getValue("systemPrompt").jsonPrimitive.content, opening.systemPrompt)
             val blocks = original.getValue("initialContexts").jsonArray.map { it.jsonObject }
             assertEquals(blocks.map { it.getValue("id").jsonPrimitive.content }, opening.initialContexts.map { it.id })
-            assertEquals(blocks.map { it.getValue("title").jsonPrimitive.content }, opening.initialContexts.map { it.title })
             assertEquals(blocks.map { it.getValue("content").jsonPrimitive.content }, opening.initialContexts.map { it.content })
         }
     }

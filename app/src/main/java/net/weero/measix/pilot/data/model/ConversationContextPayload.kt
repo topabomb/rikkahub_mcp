@@ -162,7 +162,7 @@ internal data class ConversationContextPayload(
     val body: ConversationContextBody,
 ) {
     init {
-        require(version == 1) { "unsupported_conversation_context_payload: $version" }
+        require(version in 1..2) { "unsupported_conversation_context_payload: $version" }
         require((body == ConversationContextBody.Opening) == (source == ConversationContextSource.Starter)) {
             "context_opening_source_mismatch"
         }

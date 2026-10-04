@@ -23,7 +23,6 @@ internal data class EnterpriseStarterUiModel(
     val assistantName: String,
     val title: String,
     val prompt: String,
-    val description: String?,
     val openingAvailable: Boolean,
 )
 
@@ -55,7 +54,6 @@ internal fun ResolvedConfiguration.enterpriseStarterCatalog(
                 assistantName = assistants.getValue(identity.reference(starter.assistantId)).name,
                 title = starter.title,
                 prompt = starter.prompt,
-                description = starter.description,
                 openingAvailable = starter.openingSnapshot != null,
             )
         },
@@ -65,7 +63,7 @@ internal fun ResolvedConfiguration.enterpriseStarterCatalog(
 internal data class StarterDraftRequest(val request: ConversationOpenRequest.NewDraft, val text: String)
 
 internal data class ConversationOpeningSummary(val reference: ConfigurationReference.Enterprise, val title: String, val selectionToken: Uuid?)
-internal data class StarterContextUiModel(val title: String, val content: String)
+internal data class StarterContextUiModel(val content: String)
 internal enum class StarterOpeningIssue { NOT_SUPPLIED, UPDATED, UNAVAILABLE, ASSISTANT_CHANGED }
 internal class StarterOpeningException(val issue: StarterOpeningIssue) : IllegalStateException("enterprise_starter_${issue.name.lowercase()}")
 internal data class StarterOpeningDetailUiModel(
@@ -112,5 +110,5 @@ internal fun requireCurrentStarterOpening(opening: ConversationOpening?, assista
 
 internal fun EnterpriseStarter.details(isDraft: Boolean, applicable: Boolean = true, issue: StarterOpeningIssue? = null, canRefresh: Boolean = false) =
     StarterOpeningDetailUiModel(title, prompt, openingSnapshot?.systemPrompt,
-        openingSnapshot?.initialContexts.orEmpty().map { StarterContextUiModel(it.title, it.content) },
+        openingSnapshot?.initialContexts.orEmpty().map { StarterContextUiModel(it.content) },
         isDraft, applicable, issue ?: if (openingSnapshot == null) StarterOpeningIssue.NOT_SUPPLIED else null, canRefresh)

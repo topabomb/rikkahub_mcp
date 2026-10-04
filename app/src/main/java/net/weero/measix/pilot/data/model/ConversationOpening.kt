@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.EnterpriseStarter
+import net.weero.measix.pilot.data.enterprise.StoredStarterSerializer
 
 /** Published task content instantiated once; no session, execution binding, or credentials belong here. */
 @Serializable
@@ -13,7 +14,7 @@ internal data class ConversationOpening(
     val releaseId: String,
     val generation: Long,
     val snapshotHash: String,
-    val definition: EnterpriseStarter,
+    @Serializable(with = StoredStarterSerializer::class) val definition: EnterpriseStarter,
 ) {
     init {
         require(format == 1) { "unsupported_conversation_opening_format: $format" }

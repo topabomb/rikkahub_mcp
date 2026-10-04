@@ -21,7 +21,7 @@ class StarterOpeningDetailsAndroidTest {
     @get:Rule val compose = createComposeRule()
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val detail = StarterOpeningDetailUiModel("Task", "Editable starting prompt", "{{user}} original system",
-        listOf(StarterContextUiModel("Background", "<data>{{literal}}</data>")), false, true)
+        listOf(StarterContextUiModel("<data>{{literal}}</data>")), false, true)
 
     @Test fun contextLoadsOnDemandAndRetryClearsFailureWithoutReloadingSavedContent() {
         val reads = AtomicInteger()
@@ -40,6 +40,7 @@ class StarterOpeningDetailsAndroidTest {
         compose.onNodeWithText("opening_read_failed", substring = true).assertDoesNotExist()
         compose.onNodeWithText(detail.systemPrompt).assertIsDisplayed()
         compose.onNodeWithText(detail.contexts.single().content).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.context_numbered_item, 1)).assertIsDisplayed()
         compose.runOnIdle { assertEquals(2, reads.get()) }
         compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
         compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()

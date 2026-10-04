@@ -145,11 +145,11 @@ internal object PlatformSnapshotMapper {
             } },
             starters = snapshot.starters.map { starter ->
                 EnterpriseStarter(starter.starterId, starter.assistantDefinitionId, starter.title, starter.prompt,
-                    starter.description, starter.sortOrder.checkedInt(), starter.enabled,
+                    starter.sortOrder.checkedInt(), starter.enabled,
                     starter.openingSnapshot?.let { opening ->
                         EnterpriseStarterOpeningSnapshot(opening.format.checkedInt(), opening.systemPrompt,
                             opening.initialContexts.map { block ->
-                                EnterpriseStarterInitialContext(block.id, block.title, block.content)
+                                EnterpriseStarterInitialContext(block.id, block.content)
                             })
                     })
             },

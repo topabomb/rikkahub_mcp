@@ -29,7 +29,7 @@ class StarterOpeningSelectionTest {
     }
 
     @Test fun `all selected definition changes invalidate navigation and first send without mutating source`() {
-        val variants = listOf(starter.copy(prompt = starter.prompt + "edited"), starter.copy(description = "changed"),
+        val variants = listOf(starter.copy(prompt = starter.prompt + "edited"),
             starter.copy(openingSnapshot = starter.openingSnapshot!!.copy(systemPrompt = "changed")),
             starter.copy(openingSnapshot = starter.openingSnapshot!!.copy(initialContexts = starter.openingSnapshot.initialContexts.reversed())))
         variants.forEach { changed ->

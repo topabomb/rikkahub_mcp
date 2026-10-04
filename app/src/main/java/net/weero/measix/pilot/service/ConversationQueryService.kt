@@ -296,13 +296,8 @@ class ConversationQueryService internal constructor(
             is net.weero.measix.pilot.data.model.ConversationContextBody.MessageReference -> snapshot.nodes
                 .single { it.id == body.message.nodeId }.messages.single { it.id == body.message.messageId }.toText()
             net.weero.measix.pilot.data.model.ConversationContextBody.Opening -> {
-                val blocks = requireNotNull(snapshot.opening?.definition?.openingSnapshot).initialContexts
-                kotlinx.serialization.json.buildJsonObject {
-                    put("type", kotlinx.serialization.json.JsonPrimitive("starter_context"))
-                    put("format", kotlinx.serialization.json.JsonPrimitive(1))
-                    put("blocks", kotlinx.serialization.json.Json.encodeToJsonElement(
-                        kotlinx.serialization.builtins.ListSerializer(net.weero.measix.pilot.data.enterprise.EnterpriseStarterInitialContext.serializer()), blocks))
-                }.toString()
+                net.weero.measix.pilot.data.ai.request.renderStarterContext(
+                    requireNotNull(snapshot.opening?.definition?.openingSnapshot), entry.payload.version)
             }
         }
         requireCurrentItem()
@@ -310,7 +305,9 @@ class ConversationQueryService internal constructor(
             projectConversationContextContent(entry.payload.source, text, snapshot.opening?.definition?.openingSnapshot)
         }
         requireCurrentItem()
-        ConversationContextContentUiModel(text, kotlinx.serialization.json.Json.encodeToString(
+        ConversationContextContentUiModel(
+            net.weero.measix.pilot.data.ai.request.renderContextModelText(entry.payload.source, text, entry.payload.version),
+            kotlinx.serialization.json.Json.encodeToString(
             net.weero.measix.pilot.data.model.ConversationContextSource.serializer(), entry.payload.source), presentation = presentation)
     }
 

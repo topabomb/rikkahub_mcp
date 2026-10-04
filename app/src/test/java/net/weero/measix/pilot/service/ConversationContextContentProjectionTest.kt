@@ -127,13 +127,13 @@ class ConversationContextContentProjectionTest {
         assertEquals(listOf(second, first), onlyOrder.orderAfter.map { it.id })
     }
 
-    @Test fun `starter sections preserve saved titles and literal content without duplicating system in its background use`() {
+    @Test fun `starter sections preserve literal content without duplicating system in its background use`() {
         val opening = EnterpriseStarterOpeningSnapshot(1, "saved system",
-            listOf(EnterpriseStarterInitialContext("b", "Saved title", "{{literal}}\n<background>")))
+            listOf(EnterpriseStarterInitialContext("b", "{{literal}}\n<background>")))
         val complete = projectStarterContext(opening).sections
         assertEquals(2, complete.size)
         assertEquals("saved system", complete.first().text)
-        assertEquals("Saved title", complete.last().title)
+        assertNull(complete.last().title)
         assertEquals("{{literal}}\n<background>", complete.last().text)
         assertEquals(listOf(complete.last()), projectConversationContextContent(ConversationContextSource.Starter, "raw", opening).sections)
     }

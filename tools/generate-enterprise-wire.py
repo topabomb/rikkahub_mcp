@@ -27,7 +27,7 @@ base_versions = SCHEMAS["ManagedSnapshotV4"]["properties"]["schemaVersion"]["enu
 target_versions = SCHEMAS["ManagedSnapshot"]["properties"]["schemaVersion"]["enum"]
 SCHEMAS["ManagedSnapshot"]["properties"]["schemaVersion"]["enum"] = base_versions + target_versions
 SCHEMAS["AssistantStarterDefinition"]["required"] = SCHEMAS["AssistantStarterDefinitionV4"]["required"]
-ROOTS = ["Discovery", "EnrollmentExchangeRequest", "EnrollmentExchangeResponse",
+ROOTS = ["ManagedSnapshotV4", "Discovery", "EnrollmentExchangeRequest", "EnrollmentExchangeResponse",
          "RefreshRequest", "RefreshResponse", "ManagedState", "Bootstrap",
          "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
          "Problem", "EnterpriseUpdateFeed", "WorkspaceProjection",

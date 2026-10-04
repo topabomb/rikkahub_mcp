@@ -38,7 +38,7 @@ enum class SyntheticMessageKind {
     APPLICATION_CONTEXT,
 }
 
-/** The admitted source and exact location travel together; content is already rendered. */
+/** The admitted source and exact location travel together; content retains its canonical storage form until model projection. */
 internal data class ModelContextProjection(
     val entryId: Uuid,
     val owner: ContextMessageLocator,
@@ -46,6 +46,7 @@ internal data class ModelContextProjection(
     val placement: ContextPlacement,
     val content: String,
     val source: ConversationContextSource,
+    val payloadVersion: Int = 1,
 )
 
 /** Tool system prompt 与 Provider 请求共用的请求级投影。 */
@@ -146,7 +147,7 @@ internal class RequestContextPlanner {
                     return@forEach
                 }
                 val projection = ModelContextProjection(entry.id, owner, use.role, use.placement,
-                    (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source)
+                    (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source, entry.payload.version)
                 if (use.placement == ContextPlacement.Omitted) {
                     val boundary = admissions.last { request -> request.uses.any { it.entryId == use.entryId } }
                     closed += projection.copy(placement = ContextPlacement.BeforeStep(boundary.stepId))
@@ -164,7 +165,7 @@ internal class RequestContextPlanner {
             }
             candidates += ModelContextProjection(entry.id, ContextMessageLocator(entry.ownerNodeId, entry.ownerMessageId),
                 MessageRole.USER, ContextPlacement.BeforeMessage(ContextMessageLocator(entry.anchorNodeId, entry.anchorMessageId)),
-                (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source)
+                (entry.payload.body as ConversationContextBody.Inline).text, entry.payload.source, entry.payload.version)
         }
         // An entry may be reused at a later request location. Keep its earliest retained location,
         // so the same immutable contribution is not inserted twice in a single model request.

@@ -20,8 +20,21 @@ internal object PlatformWireCodec {
     val json = Json { encodeDefaults = true; explicitNulls = false }
 
     inline fun <reified T> decode(raw: String): T {
-        val element = StrictJsonValue.parse(raw, EnterpriseConfigurationCodec.MAX_BYTES)
-        if (T::class == PlatformManagedSnapshot::class) requireSnapshotSchema(element)
+        var element = StrictJsonValue.parse(raw, EnterpriseConfigurationCodec.MAX_BYTES)
+        if (T::class == PlatformManagedSnapshot::class) {
+            requireSnapshotSchema(element)
+            if ((element as JsonObject)["schemaVersion"]?.let { (it as JsonPrimitive).longOrNull } == 4L) {
+                // Validate the complete retained contract before projecting into the
+                // current runtime model. Removed display metadata never enters it.
+                requireTypes(element, serializer<PlatformManagedSnapshotV4>().descriptor)
+                json.decodeFromJsonElement<PlatformManagedSnapshotV4>(element)
+                element = JsonObject(element.toMutableMap().apply {
+                    put("starters", JsonArray((element["starters"] as JsonArray).map { starter ->
+                        JsonObject((starter as JsonObject).filterKeys { it != "description" })
+                    }))
+                })
+            }
+        }
         requireTypes(element, serializer<T>().descriptor)
         return json.decodeFromJsonElement(element)
     }

@@ -57,7 +57,7 @@ internal fun projectAdmittedContext(
         }
     }
     fun rendered(projection: ModelContextProjection, containerId: kotlin.uuid.Uuid, synthetic: Boolean): UIMessagePart.Text =
-        UIMessagePart.Text(projection.content).also { onProjected(projection, it, containerId, synthetic) }
+        UIMessagePart.Text(renderContextModelText(projection.source, projection.content, projection.payloadVersion)).also { onProjected(projection, it, containerId, synthetic) }
     fun synthetic(projection: ModelContextProjection): UIMessage {
         val id = kotlin.uuid.Uuid.parse(UUID.nameUUIDFromBytes(
             "request-context/${projection.entryId}/${projection.owner}/${projection.role}/${projection.placement}".encodeToByteArray()).toString())

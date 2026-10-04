@@ -323,7 +323,7 @@ class EnterprisePageAndroidTest {
         val fixture = Fixture(initial.copy(configurationDetails = initial.configurationDetails!!.copy(
             resources = listOf(EnterpriseConfigurationResourceGroupUiModel(EnterpriseConfigurationResourceKind.STARTER, listOf(resource))))))
         val detail = StarterOpeningDetailUiModel(resource.displayName, "Review the inspection report.", "Published opening system.",
-            listOf(StarterContextUiModel("Inspection background", "Published opening background.")), false, true)
+            listOf(StarterContextUiModel("Published opening background.")), false, true)
         coEvery { fixture.configurationQueries.readEnterpriseStarterDetails(target) } returns detail
         fixture.show()
         click(R.string.enterprise_configuration_details_open)

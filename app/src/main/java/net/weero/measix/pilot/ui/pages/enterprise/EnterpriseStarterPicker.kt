@@ -26,7 +26,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
@@ -158,7 +157,6 @@ internal fun EnterpriseStarterPicker(
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(entry.title, style = MaterialTheme.typography.titleMedium)
                                 Text(entry.assistantName, style = MaterialTheme.typography.labelMedium)
-                                entry.description?.let { Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                             }
                         }
                     }
@@ -170,7 +168,6 @@ internal fun EnterpriseStarterPicker(
                 ) {
                     Text(starter.title, style = MaterialTheme.typography.titleLarge)
                     Text(starter.assistantName, style = MaterialTheme.typography.labelLarge)
-                    starter.description?.let { Text(it) }
                     Text(stringResource(R.string.enterprise_starters_description), style = MaterialTheme.typography.bodySmall)
                     EnterpriseStarterDefinitionContent(starter.prompt, starter.target) {
                         queries.readEnterpriseStarterDetails(starter.target)

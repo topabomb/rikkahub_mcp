@@ -8,8 +8,8 @@ internal fun starterDeviceCandidate(historical: Boolean): EnterpriseCandidate {
     val connection = PlatformConnection("https://mock-enterprise.invalid", discovery)
     val identity = EnterpriseIdentity(connection.authority, discovery.deploymentName, id("usr"), "设备测试用户")
     val opening = if (historical) null else EnterpriseStarterOpeningSnapshot(1, "  {{user}} 企业指令\n", listOf(
-        EnterpriseStarterInitialContext("second", "背景二", "  {{literal}}\n"),
-        EnterpriseStarterInitialContext("first", "背景一", ""),
+        EnterpriseStarterInitialContext("second", "  {{literal}}\n"),
+        EnterpriseStarterInitialContext("first", ""),
     ))
     val configuration = EnterpriseConfiguration(
         generation = 1,
@@ -18,7 +18,7 @@ internal fun starterDeviceCandidate(historical: Boolean): EnterpriseCandidate {
         models = listOf(EnterpriseModel(id("mdl"), "Mock", "mock-model", providerId = id("prv"))),
         tts = emptyList(), asr = emptyList(), mcpServers = emptyList(), gateways = emptyList(), memorySeeds = emptyList(),
         assistants = listOf(EnterpriseAssistant(id("asd"), "设备测试助手", "说明", id("mdl"), "助手指令", emptyList(), emptyList())),
-        starters = listOf(EnterpriseStarter(id("str"), id("asd"), "设备测试开场", " 原始提示词 ", "说明", 7, true, opening)),
+        starters = listOf(EnterpriseStarter(id("str"), id("asd"), "设备测试开场", " 原始提示词 ", 7, true, opening)),
         defaults = EnterpriseDefaults(assistantId = id("asd"), chatModelId = id("mdl")),
     )
     return EnterpriseCandidate(identity, configuration, EnterpriseExecution.Platform(

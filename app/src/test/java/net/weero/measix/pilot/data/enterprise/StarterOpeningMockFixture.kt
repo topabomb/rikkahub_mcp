@@ -14,7 +14,7 @@ internal fun withStarterOpeningMock(raw: String): String {
     val starters = root["starters"] as? JsonArray
     if (starters != null) updated["starters"] = JsonArray(starters.map { value ->
         val starter = value.jsonObject
-        JsonObject(starter + ("openingSnapshot" to starterOpeningMock()))
+        JsonObject((starter - "description") + ("openingSnapshot" to starterOpeningMock()))
     })
     // A deterministic mock identity, never the hash of the original published Core v4 bytes.
     val body = JsonObject(updated - "snapshotHash").toString().toByteArray(Charsets.UTF_8)
@@ -29,12 +29,10 @@ internal fun starterOpeningMock(): JsonObject = buildJsonObject {
     putJsonArray("initialContexts") {
         addJsonObject {
             put("id", "second")
-            put("title", "任务背景")
             put("content", "  第二段先出现，{{literal}} 不执行模板。\n")
         }
         addJsonObject {
             put("id", "first")
-            put("title", "业务条件")
             put("content", "<context>保留字面内容</context>")
         }
     }

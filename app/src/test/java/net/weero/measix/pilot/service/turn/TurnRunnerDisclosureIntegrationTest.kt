@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.Tool
@@ -139,10 +140,10 @@ class TurnRunnerDisclosureIntegrationTest {
         val updated = requests[2]
         val disclosureTexts = disclosures(updated)
         assertEquals(2, disclosureTexts.size)
-        val changed = ConversationDisclosureSnapshotService.readSections(disclosureTexts.last())
-        assertEquals(setOf(DisclosureSection.MEMORY), changed.keys)
+        val changed = Json.parseToJsonElement(disclosureTexts.last()).jsonObject
+        assertEquals(setOf("type", "memory"), changed.keys)
         assertEquals(Json.parseToJsonElement("""[[1,"external one"],[2,"own two"]]"""),
-            changed.getValue(DisclosureSection.MEMORY).getValue("rows"))
+            changed.getValue("memory").jsonObject.getValue("rows"))
         val externalIndex = updated.indexOfFirst { it.role == MessageRole.USER && it.toText() == disclosureTexts.last() }
         val toolsBeforeExternal = updated.take(externalIndex).flatMap { it.parts }.filterIsInstance<UIMessagePart.Tool>()
         assertEquals(listOf("own-one", "own-two", "barrier"), toolsBeforeExternal.map { it.providerCallId })

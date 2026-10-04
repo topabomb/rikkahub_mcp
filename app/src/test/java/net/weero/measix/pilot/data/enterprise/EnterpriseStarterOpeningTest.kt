@@ -13,8 +13,8 @@ class EnterpriseStarterOpeningTest {
             format = 1,
             systemPrompt = "",
             initialContexts = listOf(
-                EnterpriseStarterInitialContext("z", "背景二", "  {{user}}\n<state>literal</state>  "),
-                EnterpriseStarterInitialContext("a", "背景一", ""),
+                EnterpriseStarterInitialContext("z", "  {{user}}\n<state>literal</state>  "),
+                EnterpriseStarterInitialContext("a", ""),
             ),
         )
         val encoded = json.encodeToJsonElement(EnterpriseStarterOpeningSnapshot.serializer(), opening)
@@ -25,7 +25,7 @@ class EnterpriseStarterOpeningTest {
 
     @Test
     fun `opening rejects unknown format duplicate IDs and blank identities`() {
-        val block = EnterpriseStarterInitialContext("background", "背景", "literal")
+        val block = EnterpriseStarterInitialContext("background", "literal")
         assertThrows(IllegalArgumentException::class.java) {
             EnterpriseStarterOpeningSnapshot(2, "", emptyList())
         }
@@ -33,16 +33,15 @@ class EnterpriseStarterOpeningTest {
             EnterpriseStarterOpeningSnapshot(1, "", listOf(block, block.copy(content = "different")))
         }
         assertThrows(IllegalArgumentException::class.java) { block.copy(id = " \n") }
-        assertThrows(IllegalArgumentException::class.java) { block.copy(title = "\t") }
     }
 
     @Test
-    fun `historical starter missing opening stays absent and preserves its full definition`() {
+    fun `stored starter discards retired display metadata while preserving content`() {
         val raw = """{"id":"starter","assistantId":"assistant","title":"开场","prompt":" 原草稿 ","description":"说明","sortOrder":12,"enabled":false}"""
-        val old = json.decodeFromString<EnterpriseStarter>(raw)
+        val old = json.decodeFromString(StoredStarterSerializer, raw)
         assertNull(old.openingSnapshot)
         assertEquals(" 原草稿 ", old.prompt)
-        assertEquals("说明", old.description)
+        assertFalse(json.encodeToString(EnterpriseStarter.serializer(), old).contains("description"))
         assertEquals(12, old.sortOrder)
         assertFalse(old.enabled)
         val fresh = old.copy(openingSnapshot = EnterpriseStarterOpeningSnapshot(1, "", emptyList()))

@@ -102,7 +102,7 @@ input/output 按因果顺序归并为“可见历史已表达状态”（K），
 差异仅随 `ConversationContextSource.Disclosure.changes` 与正文一同接纳，服务历史展示；不进入模型输入、
 不改变 format 3、不增加全局事件表或另一份当前配置。这里的移除指退出模型可见集合，不证明资源被物理删除。
 INITIAL/BASELINE_RESTORE 不保存外部差异。历史 source 缺少 changes 时保持 null，详情明确展示当时完整状态，
-不得推断逐项修改。该默认可空字段沿现有 payload version 1 保存，不改 Room schema 或旧正文。
+不得推断逐项修改。该默认可空字段沿现有 payload 保存，不改 Room schema 或旧正文。
 
 Fork 保留原 `TurnContextSelection` 与 Tool typed result，但不制造新的历史 execution 行。
 `TurnRequestAdmission` 在原 builtin 身份及 namespace 适用时，接受已提交的 `COMPLETED` 结果作为成功证据；
@@ -110,7 +110,8 @@ Fork 保留原 `TurnContextSelection` 与 Tool typed result，但不制造新的
 Tool execution 的校验拒绝也是未执行。没有原 Turn 记录的失败或未确认结果无法证明未执行，按 RESTORE
 补齐认知，不伪装成外部变化。结果正文不足、压缩或移出窗口仍沿原缺失事实规则恢复。
 
-新增包使用 format 3：出现的分区是该分区完整状态，缺省表示未提供，空 rows 表示清空；未变化分区省略。
+新增包内部保存 format 3，payload version 2 的模型投影移除顶层 format；version 1 历史回放保留原封装。
+内部状态语义：出现的分区是该分区完整状态，缺省表示未提供，空 rows 表示清空；未变化分区省略。
 完整 C 的 256 KiB UTF-8 校验先于省略，不能以增量小为由绕过。支持的 format 1/2 历史保持原 bytes；
 历史读取按这两个格式的身份语法验证旧地址来源引用，仅用于语法校验，不转换正文，也不作为当前资源选择。
 新写入的 canonical envelope 和 format 3 仍只接受当前规范引用，非法旧身份也明确拒绝。
@@ -162,7 +163,7 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 再以 durable tree command 替换历史。它由用户显式触发、持久化且不可撤销，不挂到自动发送链路。
 保留最近消息的切点回退到完整 USER 轮次，因此配置数量是最低保留量；可压缩前缀为空则报错。
 保留节点沿用原 node/variant 身份和分支；新摘要与 HistorySummary 来源同事务提交，普通 UI 显示摘要原文，
-模型输入使用 `conversation_history_summary` format 1 数据封装并跳过用户模板。
+新摘要模型输入使用 `conversation_history_summary` 数据封装（type/content，无 format）并跳过用户模板。
 
 待摘要消息超过 256 条时递归分块，中点优先回退到 USER；没有可用的前置 USER 切点时按原中点分开。
 每条消息通过 `summaryAsText(maxLength = 2000)` 提供正文摘要，Step 标记不参与；这不是附件全文或
@@ -212,7 +213,7 @@ opening、context entry、request admission 和关联；大正文使用分段读
 ```text
 ASSISTANT: tool calls
 TOOL: 全部对应 results
-USER: conversation_disclosure_snapshot format 3（仅有必要分区时）
+USER: conversation_disclosure_snapshot（仅有必要分区时，无模型可见 format）
 ASSISTANT: 下一次模型响应
 ```
 

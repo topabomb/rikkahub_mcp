@@ -10,14 +10,25 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ConversationOpeningTest {
+
+    @Test fun `stored opening retains content and provenance after retiring display metadata`() {
+        val original = opening()
+        val encoded = ConversationOpeningCodec.encode(original)
+        val stored = encoded.replaceFirst("\"definition\":{", "\"definition\":{\"description\":\"old display only\",")
+        assertEquals(original, ConversationOpeningCodec.decode(stored))
+        assertEquals(encoded, ConversationOpeningCodec.encode(ConversationOpeningCodec.decode(stored)))
+        assertThrows(SerializationException::class.java) {
+            ConversationOpeningCodec.decode(encoded.replaceFirst("\"definition\":{", "\"definition\":{\"unknown\":true,"))
+        }
+    }
     private fun opening() = ConversationOpening(
         assistant = ConfigurationReference.parse("managed~dep_example~assistant_one") as ConfigurationReference.Enterprise,
         releaseId = "release-original", generation = 7, snapshotHash = "a".repeat(64),
         definition = EnterpriseStarter(id = "starter_one", assistantId = "assistant_one", title = "原开场",
-            prompt = "  original prompt {{literal}}\r\n", description = "source description", sortOrder = 4,
+            prompt = "  original prompt {{literal}}\r\n", sortOrder = 4,
             openingSnapshot = EnterpriseStarterOpeningSnapshot(1, "  system {{char}}\r\n", listOf(
-                EnterpriseStarterInitialContext("b", "Second name first", "背景 {% raw %}"),
-                EnterpriseStarterInitialContext("a", "Empty block", ""),
+                EnterpriseStarterInitialContext("b", "背景 {% raw %}"),
+                EnterpriseStarterInitialContext("a", ""),
             ))),
     )
 

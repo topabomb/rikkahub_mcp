@@ -473,7 +473,6 @@ internal fun projectEnterpriseConfigurationDetails(
                             EnterpriseConfigurationResourceFactKind.ASSISTANT,
                             assistantNames[value.assistantId],
                         ),
-                        fact(EnterpriseConfigurationResourceFactKind.DESCRIPTION, value.description),
                     ),
                 )
             },

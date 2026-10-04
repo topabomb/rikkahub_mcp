@@ -68,7 +68,7 @@ internal fun projectStarterContext(
     ))
     opening.initialContexts.forEach { block -> add(ConversationContextSectionUiModel(
         category = ConversationContextCategory.ENTERPRISE_BACKGROUND,
-        title = block.title,
+        title = null,
         scope = ConversationContextScope.READ_ONLY,
         text = block.content,
     )) }

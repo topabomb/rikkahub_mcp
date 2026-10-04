@@ -45,6 +45,11 @@ internal class TurnRequestAdmission(
     private val anchor = snapshot.nodes.takeWhile { it.id != node.id }.last { it.currentMessage.role == MessageRole.USER }
     private val entries = snapshot.modelContextEntries.filter { ConversationModelContextApplicability.applicable(it, branch) }
     private val existing = snapshot.contextAdmissions.singleOrNull { it.owner == owner && it.stepId == stepId }
+    // A later Step can reuse the System entry created by an earlier Step.
+    private val payloadVersion = if (existing == null) 2 else {
+        val systemId = requireNotNull(resolveUsesAt(snapshot.contextAdmissions, owner, stepId, steps).selection).systemEntryId
+        snapshot.modelContextEntries.single { it.id == systemId }.payload.version
+    }
     private val source = context.disclosure
     private val locators = snapshot.nodes.associate { it.currentMessage.id to DurableMessageLocator(it.id, it.currentMessage.id) }
 
@@ -62,11 +67,11 @@ internal class TurnRequestAdmission(
         classifyTool = ::toolFact,
     ).let { plan ->
         val summaries = entries.filter { it.payload.source is ConversationContextSource.HistorySummary }
-            .mapTo(mutableSetOf()) { it.ownerMessageId }
+            .associateBy { it.ownerMessageId }
         plan.copy(messages = plan.messages.map { message ->
-            if (message.id !in summaries) message else message.copy(parts = listOf(UIMessagePart.Text(buildJsonObject {
-                put("type", "conversation_history_summary"); put("format", 1); put("content", message.toText())
-            }.toString())))
+            val entry = summaries[message.id]
+            if (entry == null) message else message.copy(parts = listOf(UIMessagePart.Text(
+                renderContextModelText(entry.payload.source, message.toText(), entry.payload.version))))
         })
     }
 
@@ -199,7 +204,7 @@ internal class TurnRequestAdmission(
                 payload, occurrence = nextOccurrence++, stepId = stepId).also(added::add)
         }
         suspend fun inline(source: ConversationContextSource, text: String) =
-            content(ConversationContextPayload(source = source, body = ConversationContextBody.Inline(text)))
+            content(ConversationContextPayload(version = payloadVersion, source = source, body = ConversationContextBody.Inline(text)))
         fun use(entry: ConversationModelContextEntry, role: MessageRole, placement: ContextPlacement) {
             uses += ConversationContextUse(entry.id, role, placement)
         }
@@ -270,16 +275,11 @@ internal class TurnRequestAdmission(
         snapshot.opening?.let { opening ->
             val blocks = requireNotNull(opening.definition.openingSnapshot).initialContexts
             if (blocks.isNotEmpty()) {
-                val entry = content(ConversationContextPayload(source = ConversationContextSource.Starter,
+                val entry = content(ConversationContextPayload(version = payloadVersion, source = ConversationContextSource.Starter,
                     body = ConversationContextBody.Opening))
                 val placement = ContextPlacement.MessagePart(locators.getValue(firstUser.id).contextLocator(), 0)
-                val text = buildJsonObject {
-                    put("type", "starter_context"); put("format", 1)
-                    putJsonArray("blocks") { blocks.forEach { block -> add(buildJsonObject {
-                        put("id", block.id); put("title", block.title); put("content", block.content)
-                    }) } }
-                }.toString()
-                newProjections += ModelContextProjection(entry.id, owner, MessageRole.USER, placement, text, entry.payload.source)
+                val text = renderStarterContext(requireNotNull(opening.definition.openingSnapshot), entry.payload.version)
+                newProjections += ModelContextProjection(entry.id, owner, MessageRole.USER, placement, text, entry.payload.source, entry.payload.version)
                 use(entry, MessageRole.USER, placement)
             }
         }
@@ -287,11 +287,11 @@ internal class TurnRequestAdmission(
             val reconciliation = ConversationDisclosureReconciliation.reconcile(source.read(), plan.disclosureFacts, plan.previouslyDisclosed)
             reconciliation.content?.let { text ->
                 val entry = content(ConversationContextPayload(
-                    source = ConversationContextSource.Disclosure(source.namespace, reconciliation.reasons, reconciliation.changes),
+                    version = payloadVersion, source = ConversationContextSource.Disclosure(source.namespace, reconciliation.reasons, reconciliation.changes),
                     body = ConversationContextBody.Inline(text)), reuse = false)
                 val placement = if (step.ordinal == 0) ContextPlacement.MessagePart(
                     ContextMessageLocator(anchor.id, anchor.currentMessage.id), 0) else ContextPlacement.BeforeStep(stepId)
-                newProjections.add(0, ModelContextProjection(entry.id, owner, MessageRole.USER, placement, text, entry.payload.source))
+                newProjections.add(0, ModelContextProjection(entry.id, owner, MessageRole.USER, placement, text, entry.payload.source, entry.payload.version))
                 use(entry, MessageRole.USER, placement)
             }
         }

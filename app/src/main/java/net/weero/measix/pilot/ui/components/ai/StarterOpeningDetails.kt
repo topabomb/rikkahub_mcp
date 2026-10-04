@@ -69,8 +69,8 @@ private fun OpeningBody(detail: StarterOpeningDetailUiModel) {
         SelectionContainer { Text(it) }
     }
     if (detail.contexts.isNotEmpty()) Text(stringResource(R.string.opening_background), style = MaterialTheme.typography.labelLarge)
-    detail.contexts.forEach { block ->
-        Text(block.title, style = MaterialTheme.typography.labelMedium)
+    detail.contexts.forEachIndexed { index, block ->
+        Text(stringResource(R.string.context_numbered_item, index + 1), style = MaterialTheme.typography.labelMedium)
         SelectionContainer { Text(block.content) }
     }
 }

@@ -33,7 +33,7 @@ internal data class EnterpriseConfiguration(
     val mcpServers: List<EnterpriseMcpResource>,
     val assistants: List<EnterpriseAssistant>,
     val memorySeeds: List<EnterpriseMemorySeed>,
-    val starters: List<EnterpriseStarter>,
+    val starters: List<@Serializable(with = StoredStarterSerializer::class) EnterpriseStarter>,
     val gateways: List<EnterpriseGateway>,
     val defaults: EnterpriseDefaults,
     val providers: List<EnterpriseProvider>,
@@ -149,7 +149,6 @@ internal data class EnterpriseStarter(
     val assistantId: String,
     val title: String,
     val prompt: String,
-    val description: String? = null,
     val sortOrder: Int = 0,
     val enabled: Boolean = true,
     /** Absent in v4 publications and historical Applied data; v5 publications supply an opening. */
@@ -171,10 +170,14 @@ internal data class EnterpriseStarterOpeningSnapshot(
 }
 
 @Serializable
-internal data class EnterpriseStarterInitialContext(val id: String, val title: String, val content: String) {
+internal data class EnterpriseStarterInitialContext(
+    val id: String,
+    val content: String,
+    // Read-only compatibility for saved openings; current Core wire has no title.
+    @kotlinx.serialization.SerialName("title") val legacyTitle: String? = null,
+) {
     init {
         require(id.isNotBlank()) { "invalid_enterprise_starter_context_id" }
-        require(title.isNotBlank()) { "invalid_enterprise_starter_context_title" }
     }
 }
 

@@ -237,7 +237,8 @@ Model
 
 Starter 是企业发布的任务入口；`prompt` 是供用户编辑的起始输入，Opening 是会话绑定的开场定义副本。
 二者都不是运行记忆。Snapshot v4 的 Starter 只预填提示词；v5 要求 `openingSnapshot`，包含完整
-`systemPrompt` 和有序 `initialContexts(id,title,content)`。严格解析拒绝版本与字段不匹配、重复背景 ID；
+`systemPrompt` 和有序 `initialContexts(id,content)`。v5 尚未发布，只维护确定的一份结构；背景标题由界面按序生成，不作为配置字段。v5 Starter 无 `description`，领域模型、配置详情和入口选择器均不保存或展示说明。v4 由其生成 wire 类型严格验证后投影到当前运行模型，说明不进入投影；不得放宽 v5 的未知字段校验。已有磁盘配置与会话开场在校验原存储完整性后，仅在本地读取边界丢弃废弃的说明，不改写历史正文、来源或原始文件；新写入不再包含它。
+严格解析拒绝版本与字段不匹配、重复背景 ID；
 Android 保留发布值的空串、空白、顺序和字面内容，不把已发布的空 System 重新解释成“继承助手”。
 发布端如何编制默认值归 Core 合同；Android 消费 Core 导出的样例，不在客户端重新编译发布定义。
 

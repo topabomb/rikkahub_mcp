@@ -80,19 +80,18 @@ System 前后规则由 `freezeTurnSystem` 处理，不使用规则配置的 role
 
 ### 状态披露
 
-`ConversationDisclosureSnapshotService` 生成固定键序的紧凑 JSON，以下仅为便于阅读的排版：
+`ConversationDisclosureSnapshotService` 保留内部格式版本；模型投影移除顶层 `format`。新接纳请求发送以下紧凑 JSON，以下仅为便于阅读的排版：
 
 ```json
 {
   "type": "conversation_disclosure_snapshot",
-  "format": 3,
   "memory": { "enabled": false, "scope": "disabled", "header": ["id", "content"], "rows": [] },
   "sub_assistants": { "mode": "disabled", "header": ["id", "name", "description"], "rows": [] },
   "enterprise_memory_seeds": { "header": ["id", "content"], "rows": [] }
 }
 ```
 
-format 3 仅携带本次需要披露的完整分区：缺省表示本包未涉及，空 rows 表示该分区为空；不能混淆。
+状态包仅携带本次需要披露的完整分区：缺省表示本包未涉及，空 rows 表示该分区为空；不能混淆。
 不加入捕获时间、Locale 或 revision。Memory scope 为 `local/global/disabled`；子助手 mode 为
 `management_only/delegation_only/both/disabled`。Memory 按行 ID 排序，可见子助手排除调用者并按完整配置引用排序，
 Seed 保留企业绑定顺序。Seed 的 ID 是企业资源引用，不是 `memory_tool` 可写的整数 ID，关闭运行记忆不会移除 Seed。
@@ -106,15 +105,19 @@ Seed 保留企业绑定顺序。Seed 的 ID 是企业资源引用，不是 `memo
 `TurnRequestAdmission` 将 Starter 的有序背景编码为：
 
 ```json
-{"type":"starter_context","format":1,"blocks":[{"id":"…","title":"…","content":"…"}]}
+{"type":"starter_context","blocks":["第一段背景原文","第二段背景原文"]}
 ```
 
+背景块的 `id` 只用于配置身份，模型不接收 `id`、`title` 或 `format`；界面按顺序生成背景编号。
 空背景不构造包。背景置于适用窗口首个真实 USER 的原输入 parts 前；与新状态披露定位到同一 USER 时，
 披露先于背景，时间提醒位于该 USER 前。背景为字面数据，不执行占位符或消息模板。
 
-手动摘要使用 `{"type":"conversation_history_summary","format":1,"content":"…"}`，
+手动摘要使用 `{"type":"conversation_history_summary","content":"…"}`，
 来源关联摘要自身持久消息；普通 UI 仍显示摘要原文。Starter 选择和首发见 [配置架构](android-configuration-architecture.md)，
 摘要的持久化与窗口规则见 [请求上下文](request-context.md)。
+
+新接纳上下文使用本地 payload version 2，模型输入和原始输入详情共用 `ContextModelText`。
+version 1 的已保存请求仍按原格式回放，旧开场标题只在历史解码边界保留；不改写历史内容。
 
 ### 时间与文档
 

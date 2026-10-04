@@ -7,5 +7,5 @@ internal fun messageOriginEntry(node: MessageNode, source: ConversationContextSo
     }
     val locator = ContextMessageLocator(node.id, node.currentMessage.id)
     return ConversationModelContextEntry(node.id, locator.messageId, node.id, locator.messageId,
-        ConversationContextPayload(source = source, body = ConversationContextBody.MessageReference(locator)))
+        ConversationContextPayload(version = 2, source = source, body = ConversationContextBody.MessageReference(locator)))
 }
