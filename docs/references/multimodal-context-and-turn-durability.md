@@ -246,10 +246,10 @@ Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入
 - `ArtifactStore` 在同一 lifecycle lock 内校验原操作 scope、ACTIVE/已发布并取得既有 retention pin，锁外读取；成功、失败和取消都在 finally 释放。
   识图内存快照复用 FileEncoder 的压缩、EXIF 方向和格式转换，不以 raw data URI 绕过现有图片编码；网络调用不持有磁盘文件，也不创建副本。
 - 未注入 resolver 的执行环境统一返回 `attachment_resolution_unavailable`，不静默成功。
-- 远程图片每个最多 20 MiB，声明长度和实际字节数都受限，下载有总超时；最多 4 个顺序处理。允许用户 LAN 发布资源，仍拒绝 loopback/link-local/metadata 等地址。跨源跳转移除 Basic，拒绝 HTTPS 降级。
+- 远程图片每个最多 20 MiB，声明长度和实际字节数都受限，每次 HTTP 请求与响应体读取共享超时；最多 4 个顺序处理。允许用户 LAN 发布资源，仍拒绝 loopback/link-local/metadata 等地址。跨源跳转移除 Basic，拒绝 HTTPS 降级。
   `Call.readResponse` 持有请求直到响应体消费结束，取消调用真实 Call.cancel 并关闭响应；没有识别临时文件。图像解码前限制尺寸和像素，取消检查位于编码各阶段，单次原生解码/压缩需结束后才能观察取消。
 - 识别无缓存；结果作为显式 Tool Result 已是正确的历史记录。
-- 失败 reason 原样透传，代码含义见 [提示词与工具](prompts-and-tools.md)。
+- 失败 reason 原样透传，代码含义见 [提示词与工具](prompts-and-tools.md)。编码拒绝无效图片时返回 `unsupported_attachment_type`，其他编码异常返回 `attachment_read_failed`；保留简短类型与原因及完整异常日志，取消继续传播。
 
 ### 配置兼容
 

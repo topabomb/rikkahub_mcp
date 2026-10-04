@@ -175,6 +175,35 @@ class AttachmentResolverTest {
         }
     }
 
+    @Test fun `local and remote encoding failures keep their cause and distinguish invalid content`() = runTest {
+        coEvery { store.withUploadImages<AttachmentResolveResult>(ConfigurationScope.Personal, any(), any()) } coAnswers {
+            thirdArg<suspend (ArtifactImageReadResult) -> AttachmentResolveResult>()(
+                ArtifactImageReadResult.Success(listOf(image("upload/a.png", TINY_PNG))))
+        }
+        val fetcher = mockk<SafeRemoteMediaFetcher>()
+        coEvery { fetcher.fetch(any(), true) } returns RemoteMediaFetchResult.Success(TINY_PNG, "image/png", "a.png")
+        val subject = AttachmentResolver(store, fetcher)
+        for (path in listOf("/upload/a.png", "https://example.test/a.png")) {
+            for ((error, reason) in listOf(
+                IllegalArgumentException("Failed to decode image") to AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE,
+                IllegalStateException("Failed to compress image") to AttachmentFailureReasons.ATTACHMENT_READ_FAILED,
+                java.io.IOException("encoder stream closed") to AttachmentFailureReasons.ATTACHMENT_READ_FAILED,
+            )) {
+                coEvery { encodeImageBytes(any(), any()) } throws error
+                val result = subject.readImages(ConfigurationScope.Personal, listOf(path)) as AttachmentResolveResult.Failure
+                assertEquals(reason, result.reason)
+                assertTrue(requireNotNull(result.detail).contains(error.javaClass.simpleName))
+                assertTrue(requireNotNull(result.detail).contains(requireNotNull(error.message)))
+            }
+            val cancelled = CancellationException("stop encoding")
+            coEvery { encodeImageBytes(any(), any()) } throws cancelled
+            try {
+                subject.readImages(ConfigurationScope.Personal, listOf(path))
+                throw AssertionError("expected cancellation")
+            } catch (actual: CancellationException) { assertTrue(actual === cancelled) }
+        }
+    }
+
     private fun image(path: String, bytes: ByteArray): ArtifactImageContent {
         val uri = mockk<Uri>()
         every { uri.toString() } returns "file:///managed/$path"

@@ -35,7 +35,7 @@ class AttachmentResolver(
                     is RemoteMediaFetchResult.Success -> try {
                         AttachmentResolveResult.Success(listOf(UIMessagePart.Image(url = encodeImageBytes(fetched.bytes).base64)))
                     } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE, "Unsupported or invalid image data.") }
+                    catch (error: Exception) { encodingFailure(error) }
                 }
             } else readUploadedImages(scope, listOf(path))
             when (result) {
@@ -57,8 +57,8 @@ class AttachmentResolver(
                     )
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (_: Exception) {
-                    AttachmentResolveResult.Failure(AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE)
+                } catch (error: Exception) {
+                    encodingFailure(error)
                 }
             }
         }
@@ -88,6 +88,15 @@ class AttachmentResolver(
                 },
             )
         }
+    }
+
+    private fun encodingFailure(error: Exception): AttachmentResolveResult.Failure {
+        android.util.Log.w("AttachmentInspection", "Attachment image encoding failed", error)
+        return AttachmentResolveResult.Failure(
+            if (error is IllegalArgumentException) AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE
+            else AttachmentFailureReasons.ATTACHMENT_READ_FAILED,
+            me.rerere.ai.core.ToolErrorProtocol.boundedDetail("${error.javaClass.simpleName}: ${error.message ?: "Image encoding failed"}"),
+        )
     }
 
     private fun validPaths(paths: List<String>): Boolean =
