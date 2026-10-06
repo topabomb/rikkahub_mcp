@@ -46,6 +46,33 @@ import org.junit.Test
  * 契约拒绝只落失败结果不建执行事实、暂停经 [TurnPause] 交回且不经流式通道、审批派生与恢复恰好一次。
  */
 class ToolBatchRunnerTest {
+    @Test fun `full client failure is committed with tool result survives reload and is excluded from the next request`() = runTest {
+        val detail = "reading /workspace/resource.csv " + "x".repeat(500) + " retained-tail token=private-token"
+        val tool = Tool(name = "failure_probe", description = "probe",
+            execute = { throw java.io.IOException(detail, IllegalStateException("original cause 111")) })
+        val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", tool.name, "{}")
+        val harness = createProviderHarness()
+        val checkpoints = mutableListOf<TurnCheckpoint>()
+        harness.handler.run(turnRunInputsFixture(conversationId = Uuid.random(), settings = harness.settings,
+            model = harness.model, mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = listOf(UIMessage.user("run"), UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))),
+            assistant = harness.assistant, promptInputs = testPromptInputs(), tools = listOf(tool), maxSteps = 2,
+            onCheckpoint = checkpoints::add))
+        val committed = checkpoints.filterIsInstance<ToolResultCheckpoint>().single()
+        assertEquals(ToolExecutionStatus.FAILED, committed.toolExecution?.status)
+        val reloaded = Json.decodeFromString(UIMessage.serializer(), Json.encodeToString(UIMessage.serializer(), committed.assistantMessage))
+        val result = reloaded.getTools().single()
+        assertEquals(ToolResultStatus.FAILED, result.resultStatus)
+        val diagnostic = requireNotNull(result.clientDiagnostic).detail
+        assertTrue(diagnostic.contains("x".repeat(500) + " retained-tail token=<redacted>"))
+        assertTrue(diagnostic.contains("Caused by: IllegalStateException: original cause 111"))
+        assertFalse(diagnostic.contains("private-token"))
+        val providerTool = harness.providerMessages.captured.flatMap { it.parts }.filterIsInstance<UIMessagePart.Tool>().single()
+        assertEquals(null, providerTool.clientDiagnostic)
+        assertEquals(result.output, providerTool.output)
+        assertFalse((providerTool.output.single() as UIMessagePart.Text).text.contains("retained-tail"))
+    }
+
     @Test
     fun `invalid pending closes while valid batch waits and resumes exactly once with derived approval`() = runTest {
         val executed = mutableListOf<Pair<String, Boolean>>()

@@ -18,6 +18,22 @@ import kotlin.uuid.Uuid
  * 核心不变量：durable 的 [UIMessagePart.Step] 绝不进入 Provider，其余 parts 顺序与身份逐字保留。
  */
 class RequestAssemblerTest {
+    @Test fun `client diagnostics stay in durable history and never enter provider input including nested output`() {
+        val nested = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "nested", "inner", "{}",
+            output = listOf(UIMessagePart.Text("nested result")), clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic("inner private diagnostic"))
+        val tool = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", "tool", "{}",
+            output = listOf(UIMessagePart.Text("bounded model result"), nested),
+            clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic("outer private diagnostic"))
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
+        val assembled = assembler.assemble(listOf(message))
+        val projected = assembled.providerMessages.single().parts.single() as UIMessagePart.Tool
+        assertEquals(null, projected.clientDiagnostic)
+        assertEquals(null, (projected.output[1] as UIMessagePart.Tool).clientDiagnostic)
+        assertEquals(tool.copy(clientDiagnostic = null, output = listOf(tool.output.first(), nested.copy(clientDiagnostic = null))), projected)
+        assertEquals(listOf(projected), assembled.providerVisibleMessages.single().parts)
+        assertEquals("outer private diagnostic", message.getTools().single().clientDiagnostic?.detail)
+    }
+
     private val assembler = RequestAssembler()
 
     private fun step(ordinal: Int) = UIMessagePart.Step(

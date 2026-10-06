@@ -15,6 +15,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlinx.serialization.encodeToString
+import me.rerere.ai.ui.UIMessage
+import me.rerere.common.configuration.ConfigurationReference
+import me.rerere.common.configuration.EnterpriseAuthority
+import me.rerere.common.configuration.RetiredLocalEnterpriseIdentity
+import net.weero.measix.pilot.data.configuration.storageKey
+import net.weero.measix.pilot.data.db.transcript.readTranscriptPayload
+import net.weero.measix.pilot.utils.JsonInstant
+import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
 class Migration_12_13Test {
@@ -24,6 +33,50 @@ class Migration_12_13Test {
         emptyList(),
         FrameworkSQLiteOpenHelperFactory(),
     )
+
+    @Test
+    fun retiredLocalRootsAndTranscriptSurviveFullUpgradeWithoutJoiningSameNamedPlatformPrincipal() {
+        val name = "migration-retired-local-preservation"
+        val retired = EnterpriseAuthority(RetiredLocalEnterpriseIdentity.encode("local:example", "dep_example"))
+        val retiredScope = ConfigurationScope.Enterprise(retired, "usr_example").storageKey()
+        val oldScope = "enterprise~local:example~dep_example~dXNyX2V4YW1wbGU"
+        val oldAssistant = "managed~local~example~dep_example~asd_one"
+        val newAssistant = "managed~${retired.deploymentId}~asd_one"
+        val oldModel = "managed~local~example~dep_example~mdl_one"
+        val message = UIMessage.user(oldModel).copy(modelId = ConfigurationReference.Enterprise(retired, "mdl_one"))
+        val conversation = Uuid.random().toString()
+        val node = Uuid.random().toString()
+        val transcript = JsonInstant.encodeToString(listOf(message)).replace(message.modelId.toString(), oldModel)
+        helper.createDatabase(name, 12).use { db ->
+            db.execSQL("INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at,suggestions,is_pinned,scope,custom_system_prompt) VALUES(?,?,'kept local title',1,2,'[]',0,?,?)", arrayOf(conversation, oldAssistant, oldScope, oldModel))
+            db.execSQL("INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at,suggestions,is_pinned,scope) VALUES('platform',?,'kept platform title',1,2,'[]',0,'enterprise~platform:example~dep_example~dXNyX2V4YW1wbGU')", arrayOf("managed~platform~example~dep_example~asd_one"))
+            db.execSQL("INSERT INTO ConversationEntity(id,assistant_id,title,create_at,update_at,suggestions,is_pinned,scope) VALUES('personal','shared','kept personal title',1,2,'[]',0,'personal')")
+            db.execSQL("INSERT INTO message_node(id,conversation_id,node_index,messages,select_index,transcript_schema) VALUES(?,?,0,?,0,3)", arrayOf(node, conversation, transcript))
+            db.execSQL("INSERT INTO MemoryEntity(id,assistant_id,content,scope) VALUES(1,?,'kept local memory',?)", arrayOf(oldAssistant, oldScope))
+            db.execSQL("INSERT INTO artifact(id,folder,relative_path,display_name,mime_type,size_bytes,created_at,updated_at,scope) VALUES(1,'upload','upload/kept-local.txt','kept','text/plain',9,1,1,?)", arrayOf(oldScope))
+            db.execSQL("INSERT INTO GenMediaEntity(id,path,model_id,prompt,create_at,scope) VALUES(1,'images/kept-local.png','model','kept prompt',1,?)", arrayOf(oldScope))
+            db.execSQL("INSERT INTO conversation_folder(id,assistant_id,name,sort_index,create_at,scope) VALUES('folder',?,'kept folder',0,1,?)", arrayOf(oldAssistant, oldScope))
+            db.execSQL("INSERT INTO favorites(id,type,ref_key,ref_json,snapshot_json,created_at,updated_at,scope) VALUES('favorite','node','kept-key','{}','kept snapshot',1,1,?)", arrayOf(oldScope))
+        }
+        helper.runMigrationsAndValidate(name, 15, true, Migration_12_13, Migration_13_14, Migration_14_15).use { db ->
+            assertEquals(listOf("personal"), values(db, "SELECT scope FROM ConversationEntity WHERE id='personal'"))
+            assertEquals(listOf("enterprise~dep_example~dXNyX2V4YW1wbGU"), values(db, "SELECT scope FROM ConversationEntity WHERE id='platform'"))
+            assertEquals(listOf(retiredScope), values(db, "SELECT scope FROM ConversationEntity WHERE id='$conversation'"))
+            listOf("MemoryEntity", "artifact", "GenMediaEntity", "conversation_folder", "favorites").forEach { table ->
+                assertEquals(listOf(retiredScope), values(db, "SELECT scope FROM `$table`"))
+            }
+            assertEquals(listOf(newAssistant), values(db, "SELECT assistant_id FROM ConversationEntity WHERE id='$conversation'"))
+            assertEquals(listOf("kept local memory"), values(db, "SELECT content FROM MemoryEntity"))
+            assertEquals(listOf("upload/kept-local.txt"), values(db, "SELECT relative_path FROM artifact"))
+            assertEquals(listOf("images/kept-local.png"), values(db, "SELECT path FROM GenMediaEntity"))
+            assertEquals(listOf("kept snapshot"), values(db, "SELECT snapshot_json FROM favorites"))
+            assertEquals(listOf(oldModel), values(db, "SELECT custom_system_prompt FROM ConversationEntity WHERE id='$conversation'"))
+            assertEquals(message, JsonInstant.decodeFromString<List<UIMessage>>(readTranscriptPayload(db, node)).single())
+            assertEquals("local:example" to "dep_example", RetiredLocalEnterpriseIdentity.decode(
+                (configurationScopeFromStorageKey(retiredScope) as ConfigurationScope.Enterprise).authority.deploymentId))
+            db.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+        }
+    }
 
     @Test
     fun enterpriseDataKeepsDeploymentUserAndResourceIdentityWithoutOriginSource() {

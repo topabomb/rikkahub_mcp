@@ -585,10 +585,14 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(reset.failure)
                             Button(onClick = vm::retryReset, enabled = !working) { Text(stringResource(R.string.application_recovery_retry)) }
                         }
-                    } else {
+                    } else if (reset.running) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             LinearProgressIndicator(Modifier.fillMaxWidth())
                             Text(stringResource(R.string.enterprise_reset_progress), style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        Button(onClick = vm::retryReset, enabled = !working) {
+                            Text(stringResource(R.string.application_recovery_retry))
                         }
                     }
                 }

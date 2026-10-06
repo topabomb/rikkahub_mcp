@@ -294,6 +294,11 @@ class PlatformSnapshotMapperTest {
         assertEquals(candidate.configuration, loaded.configuration)
         assertEquals(candidate.execution, reopened.execution(loaded.manifest))
         assertNotEquals(legacyVersion.revision, loaded.manifest.applied?.revision)
+        val migratedManifest = java.io.File(folder, "manifest.json").readBytes()
+        assertEquals(loaded, enterpriseTestStore(folder).load())
+        assertTrue(migratedManifest.contentEquals(java.io.File(folder, "manifest.json").readBytes()))
+        assertTrue(legacyConfiguration.contentEquals(java.io.File(revision, "configuration.json").readBytes()))
+        assertTrue(legacyExecution.contentEquals(java.io.File(revision, "execution.json").readBytes()))
     }
 
     @Test fun `same generation cannot replace the published platform hash`() = runBlocking {

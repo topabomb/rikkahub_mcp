@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.ui
 
+import net.weero.measix.pilot.ui.components.message.ChatMessageToolStep
+
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.ComponentActivity
@@ -103,6 +105,62 @@ class DiagnosticConsumersAndroidTest {
         compose.onNodeWithText("draft.txt").assertIsDisplayed()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertIsEnabled()
         coVerify(exactly = 1) { commands.writeText("workspace", "draft.txt", "original draft") }
+        clipboard().clearPrimaryClip()
+    }
+
+    @Test fun toolFailureWithoutOutputKeepsFullDiagnosticAvailableForCopy() = toolDiagnostic(false)
+
+    @Test fun archivedToolFailureKeepsFullDiagnosticAvailableForCopy() = toolDiagnostic(true)
+
+    @Test fun askUserFailureKeepsFullDiagnosticAvailableForCopy() {
+        val diagnostic = "IllegalStateException: saved interaction failure\nCaused by: IOException: retained original cause"
+        val tool = me.rerere.ai.ui.UIMessagePart.Tool(kotlin.uuid.Uuid.random(), kotlin.uuid.Uuid.random(), "call", "ask_user", "{}",
+            resultStatus = me.rerere.ai.ui.ToolResultStatus.FAILED,
+            clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic(diagnostic))
+        val locator = me.rerere.ai.core.ToolCallLocator(kotlin.uuid.Uuid.random(), tool.stepId, tool.localCallId)
+        compose.setContent { DiagnosticTestTheme {
+            CompositionLocalProvider(net.weero.measix.pilot.ui.context.LocalSettings provides net.weero.measix.pilot.data.datastore.Settings.dummy()) {
+                ChainOfThought(steps = listOf(tool)) { part ->
+                    ChatMessageToolStep(part, locator,
+                        net.weero.measix.pilot.service.runtime.ToolLivePhase.FAILED)
+                }
+            }
+        } }
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        copyDetails()
+        compose.runOnIdle { assertEquals(diagnostic, clipboard().primaryClip?.getItemAt(0)?.text.toString()) }
+        clipboard().clearPrimaryClip()
+    }
+
+    private fun toolDiagnostic(archived: Boolean) {
+        val diagnostic = IOException("reading /workspace/data.csv " + "x".repeat(500) + " retained-tail token=private-token",
+            IllegalStateException("original cause 111")).userVisibleDiagnostic()
+        val tool = me.rerere.ai.ui.UIMessagePart.Tool(kotlin.uuid.Uuid.random(), kotlin.uuid.Uuid.random(), "call", "diagnostic_probe", "{}",
+            resultStatus = me.rerere.ai.ui.ToolResultStatus.FAILED,
+            clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic(diagnostic),
+            runtimeState = me.rerere.ai.ui.ToolRuntimeState(me.rerere.ai.core.ToolOutputPolicy.ARCHIVABLE_TEXT,
+                if (archived) me.rerere.ai.ui.ToolOutputArchive(7, me.rerere.ai.ui.ToolOutputArchiveRef("not-installed.txt", "text/plain"), 500, 1) else null))
+        val locator = me.rerere.ai.core.ToolCallLocator(kotlin.uuid.Uuid.random(), tool.stepId, tool.localCallId)
+        compose.setContent { DiagnosticTestTheme {
+            CompositionLocalProvider(net.weero.measix.pilot.ui.context.LocalSettings provides net.weero.measix.pilot.data.datastore.Settings.dummy()) {
+                ChainOfThought(steps = listOf(tool)) { part ->
+                    ChatMessageToolStep(part, locator,
+                        net.weero.measix.pilot.service.runtime.ToolLivePhase.FAILED)
+                }
+            }
+        } }
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_message_tool_call_generic, "diagnostic_probe")).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        copyDetails()
+        compose.runOnIdle {
+            assertEquals(diagnostic, clipboard().primaryClip?.getItemAt(0)?.text.toString())
+            assertFalse(diagnostic.contains("private-token"))
+            assertTrue(diagnostic.contains("retained-tail token=<redacted>"))
+        }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).assertIsDisplayed()
         clipboard().clearPrimaryClip()
     }
 

@@ -49,6 +49,7 @@ internal data class EnterpriseDataResetProgress(
     val mode: EnterpriseDataResetMode,
     val stage: EnterpriseDataResetStage,
     val failure: String?,
+    val running: Boolean,
 )
 
 /**

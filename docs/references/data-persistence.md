@@ -84,7 +84,7 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 `Migration_11_12` 给 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏六类根记录追加 `scope TEXT NOT NULL DEFAULT 'personal'`。旧行的 ID、payload、引用、索引和外键不变；消息、turn、tool 和 context 通过所属会话确定域，不重复保存。ConfigurationScopeConverter 使用当时的来源、部署与用户编码，非法编码不能回退个人域。
 
-`Migration_12_13` 在同一事务中逐表验证并转换上述六类根记录的非 Personal scope，以及 Conversation、Memory 与文件夹中的 managed ConfigurationReference；任一旧值不规范即整笔回滚。企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，企业引用改写为 `managed~deploymentId~resourceId`。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 deploymentId、userId、资源 ID、主键、关系或内容；运行时转换器只接受新格式。
+`Migration_12_13` 在同一事务中逐表验证并转换上述六类根记录的非 Personal scope，以及 Conversation、Memory 与文件夹中的 managed ConfigurationReference；任一旧值不规范即整笔回滚。企业 scope 从 `enterprise~sourceNamespace~deploymentId~userId` 一次性改写为 `enterprise~deploymentId~userId`，企业引用改写为 `managed~deploymentId~resourceId`。平台主体只去除地址来源；退休 local 主体通过 `RetiredLocalEnterpriseIdentity` 将原来源与部署完整编码进保留 deploymentId，不与平台主体合并，也不能获得新的执行授权，具体规则见[配置架构](android-configuration-architecture.md)。同一次迁移把高频域内读取索引改为以 `scope` 开头，避免地址变化后保留下来的多企业数据在列表、分页、记忆、文件、媒体、文件夹和收藏查询中互相扩大扫描；Child 外键、全库恢复、生命周期状态与唯一性查询继续保留各自不带 scope 的必要索引。迁移不改变 userId、资源 ID、主键、关系、正文或 payload 路径；运行时转换器只接受新格式。
 
 ### 上下文与开场持久化
 

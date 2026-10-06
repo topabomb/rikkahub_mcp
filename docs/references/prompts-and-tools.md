@@ -294,7 +294,11 @@ Shell 非零退出和超时分别为 `shell_exit_nonzero/shell_timeout`，仍保
 
 搜索 HTTP 拒绝使用 `invalid_request/auth_failed/rate_limited/search_provider_error`，detail 保留服务名与 HTTP 状态。
 未预期实现异常的 runtime_error detail 保留异常类型及 cause 链最深非空 message；无 message 至少保留类型。
-完整 cause/堆栈记录到诊断日志。checkpoint、资源登记等 Runtime 基础设施异常继续向 Turn owner 传播。
+完整 cause/堆栈经脱敏记录到诊断日志；未预期的准备/执行异常及工具内部超时另保存可选 typed
+`Tool.clientDiagnostic`，保留完整异常类型、message、cause 和 suppressed，不受模型 detail 长度限制。
+该诊断与结果沿同一检查点提交，归档 output 不删除它，旧记录缺失时保持 null；工具详情提供展开与复制。
+`RequestAssembler` 在唯一 Provider 边界剥离 clientDiagnostic，模型只收到原结果信封。
+checkpoint、资源登记等 Runtime 基础设施异常继续向 Turn owner 传播。
 只脱敏凭据和明确隐私内容，不删除定位所需的非敏感细节；不可解析响应只取有意义的短错误字段，不回传 HTML、乱码或内联 base64。
 
 历史媒体未能持久化时，回放使用 `unavailable/media_persistence_failed` 表达不可读，不倒改原执行终态。

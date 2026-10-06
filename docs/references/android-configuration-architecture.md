@@ -88,7 +88,8 @@ JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 - `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
 - `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以完整 ConfigurationScope 保存 ResourceSelections、企业域的 AssistantUsagePreferences 和 GatewayPreference。Gateway 偏好随 Deployment、User 与资源 ID 隔离；旧顶层 gateways 不具备主体归属，迁移不猜测归属。SharedPreferences 表中的偏好仍由原 owner 管理。
 - `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业 deploymentId/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~deploymentId~资源ID`。ConfigurationScope 企业身份只包括 deploymentId/userId，URL、域名、端口、服务器位置、企业名称和用户名等可变属性都不参与身份。Settings 投影只提供个人配置；企业聊天、子助手、辅助模型、MCP、语音与配置界面通过原域的 `ResolvedConfiguration` 读取资源和选择。
-- `EnterprisePrincipalPreferencesMigration` 在 DataStore 打开前一次性去除旧 authority 中的 `sourceNamespace` 并将旧企业引用改写为 deploymentId 格式；同一主体因多个旧 URL 来源产生的 Settings scope 按序列化顺序以后出现的标量为准、逐资源合并偏好，MCP Catalog 保留最高 managed generation/revision 的可重建缓存。Room 的同类持久字段由 `Migration_12_13` 在数据库事务内改写；转换时严格验证非 Personal scope 与 managed reference，任一异常使整笔迁移回滚。正常解析器只接受新格式，不保留旧格式 fallback。
+- `EnterprisePrincipalPreferencesMigration` 在 DataStore 打开前定点转换 `scopes.scope.authority`、资源选择、Gateway 与助手使用偏好的引用字段；预设消息复用 `LegacyEnterpriseTranscriptMigration`，只转换 `modelId` 和子助手目标 metadata。模板、正文、正则文本、Header、Body、Skills 与未知 JSON 字段不作为身份解释。同一平台主体因多个旧 URL 来源产生的 Settings scope 按序列化顺序以后出现的标量为准、逐资源合并偏好，MCP Catalog 保留最高 managed generation/revision 的可重建缓存。Room 的同类持久字段由 `Migration_12_13` 在数据库事务内改写；转换时严格验证非 Personal scope 与 managed reference，任一异常使整笔迁移回滚。正常解析器只接受新格式，不保留旧格式 fallback。
+- 已退休 local 示例或导入来源的数据使用 `RetiredLocalEnterpriseIdentity`：将原 `sourceNamespace` 与 deploymentId 的长度帧 UTF-8 字节编码为 `retired-local.` 保留 deploymentId，原身份可完整解码。scope、引用及 MCP 使用同一转换，userId、资源 ID、关系、正文与 payload 不变，不与同名平台主体合并。当前 serializer 校验保留编码的规范性；`EnterpriseConfigurationCodec.validateIdentity` 拒绝该命名空间取得平台 Session。退休记录仍归原持久化 owner，不开放 local 执行或新的可编辑域；个人恢复及个人备份合并保留这些非 Personal 数据。旧 manifest 不受支持时由 Enterprise 发布 Failed 并保留原文件，个人恢复不等待其成功。
 - Settings、MCP Catalog、Conversation、Memory、Artifact 与媒体缓存/查询均以稳定的 `deploymentId + userId` scope 归属；修改企业地址不会复制或清空缓存。`Migration_12_13` 同时把高频域内查询索引改为 scope 前缀，保留 Child 外键、全库恢复和生命周期查询所需的非 scope 索引，不增加第二套缓存或地址到身份的映射。
 - `UserSettingsMigration` 在旧 OCR/Search/MCP 迁移之后，将旧键转换并在同一次 DataStore 迁移提交中移除；MCP Catalog 的 pending staging 保留给 Catalog owner。旧资源或 tombstone 解码失败会中止迁移，原输入不变。正常读写只访问新文档，没有旧键 fallback。
 - 用户定义及其配置绑定只接受 User 引用；按企业保存的选择允许 User 或同 authority 的 Enterprise 引用，拒绝外域引用。会话、Message、Turn、文件与 Workspace 的自身 ID 继续使用 UUID。
@@ -149,7 +150,7 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 
 本地到期计时只唤醒 `expireIfCurrent`，在 Session 锁内复核原身份与最新期限；旧计时和提交失败后的重试不能撤销已续期 Session。服务端明确的到期/撤销/删除按原终态协议处理。`401 invalid_credential` 仅证明 access token 被拒绝；服务按原 Session/连接串行恢复凭据，只有 refresh credential 明确终态或远端 Session/主体终态才退出。新 token 再次被拒绝仍保留本次错误，不伪称登录到期。
 
-`EnterpriseIdentityDataDisposer` 按 principal 编排各 owner 清理。`EnterpriseDataResetService` 先持久保存“仅删除接入”或“接入和全部企业历史”的 reset intent，复用关闭屏障并在重启后继续；更强删除终态可扩大清理范围。任何分支都不删除个人数据，也不依赖 Core logout 成功；损坏 manifest 不能通过回读旧值假装重置成功。
+`EnterpriseIdentityDataDisposer` 按 principal 编排各 owner 清理。`EnterpriseDataResetService` 先持久保存“仅删除接入”或“接入和全部企业历史”的 reset intent，由应用 scope 的 worker 持有该操作；页面取消只取消等待，不取消已接纳的清理。重试复用尚在执行的原 intent，UI 区分 running、pending 与 failure。服务复用关闭屏障并在重启后继续；启动 resume 保持 `ApplicationRecoveryCoordinator` 门禁开放前的原恢复顺序，更强删除终态可扩大清理范围。任何分支都不删除个人数据，也不依赖 Core logout 成功；损坏 manifest 不能通过回读旧值假装重置成功。
 
 接入、格式与消费者义务的外部权威见 [Control Protocol](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md)。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
 

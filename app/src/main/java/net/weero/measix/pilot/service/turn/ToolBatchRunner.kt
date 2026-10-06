@@ -205,6 +205,7 @@ internal class ToolBatchRunner(
                     completedTool = latestTool.copy(
                         output = outcome.output,
                         resultStatus = outcome.resultStatus,
+                        clientDiagnostic = outcome.clientDiagnostic,
                         runtimeState = latestTool.runtimeState.copy(
                             outputPolicy = outcome.outputPolicy,
                         ),

@@ -16,6 +16,37 @@ class EnterpriseConfigurationRecoveryTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `retired local identity cannot acquire a platform session and personal recovery remains available`() = runTest {
+        val root = temporary.newFolder()
+        val originalManifest = """{"schemaVersion":3,"phase":"READY","identity":{"sourceNamespace":"local:example"}}"""
+        File(root, "manifest.json").writeText(originalManifest)
+        val originalPayload = File(root, "old-local-payload").apply { writeText("kept local source") }
+        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        assertTrue(controller.recover() is EnterpriseState.Failed)
+        assertTrue(controller.withRealmAccess(RealmAccess.Personal) { true })
+        assertEquals(originalManifest, File(root, "manifest.json").readText())
+        assertEquals("kept local source", originalPayload.readText())
+        val packet = exampleEnterprisePackage()
+        val retired = me.rerere.common.configuration.RetiredLocalEnterpriseIdentity.encode("local:example", packet.identity.authority.deploymentId)
+        val identity = packet.identity.copy(authority = me.rerere.common.configuration.EnterpriseAuthority(retired))
+        val error = assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterpriseConfigurationCodec.validateIdentity(identity)
+        }
+        assertEquals("retired_local_enterprise_identity", error.reason)
+        val fresh = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        try {
+            fresh.enrollFixture(packet.copy(identity = identity))
+            fail("Retired principal must not acquire a Session")
+        } catch (error: IllegalArgumentException) {
+            // Platform DTO validation rejects the reserved wire spelling before enrollment starts.
+            // The direct domain check above independently protects non-wire publication boundaries.
+            assertEquals("invalid_platform_Discovery_deploymentId", error.message)
+        }
+        assertNull((fresh.recover() as EnterpriseState.Available).manifest.session)
+        assertTrue(fresh.withRealmAccess(RealmAccess.Personal) { true })
+    }
+
+    @Test
     fun `unreadable configuration preserves identity data access navigation and local exit`() = runTest {
         val root = temporary.newFolder()
         val original = EnterpriseSessionController(enterpriseTestStore(root))

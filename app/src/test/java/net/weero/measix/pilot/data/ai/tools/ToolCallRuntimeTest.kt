@@ -39,6 +39,26 @@ import kotlin.uuid.Uuid
  * 整批编排（checkpoint、TurnPause、串行执行）归 `ToolBatchRunnerTest`。
  */
 class ToolCallRuntimeTest {
+    @Test fun `unexpected execution stores full sanitized causes independently of bounded model error`() = runTest {
+        val detail = "reading /workspace/data.csv " + "😀".repeat(300) + " retained-tail token=private-token"
+        val error = IllegalStateException("outer operation", java.io.IOException(detail)).apply {
+            addSuppressed(java.io.IOException("cleanup failed for resource 111"))
+        }
+        val definition = Tool(name = "broken", description = "broken", execute = { throw error })
+        val outcome = runtime.execute(prepared(definition, "{}"), hooks())
+        assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
+        val diagnostic = requireNotNull(outcome.clientDiagnostic).detail
+        assertTrue(diagnostic.contains("IllegalStateException: outer operation"))
+        assertTrue(diagnostic.contains("IOException: reading /workspace/data.csv " + "😀".repeat(300)))
+        assertTrue(diagnostic.contains("retained-tail token=<redacted>"))
+        assertTrue(diagnostic.contains("Suppressed: IOException: cleanup failed for resource 111"))
+        assertFalse(diagnostic.contains("private-token"))
+        val envelope = Json.parseToJsonElement((outcome.output.single() as UIMessagePart.Text).text).jsonObject
+        val modelDetail = envelope.getValue("detail").jsonPrimitive.content
+        assertTrue(modelDetail.codePointCount(0, modelDetail.length) <= 128)
+        assertFalse(modelDetail.contains("retained-tail"))
+    }
+
     private val runtime = ToolCallRuntime(Json)
     private val messageId = Uuid.random()
     private val stepId = Uuid.random()
@@ -110,6 +130,7 @@ class ToolCallRuntimeTest {
         assertEquals("runtime_error", envelope.getValue("reason").jsonPrimitive.content)
         assertTrue(envelope.getValue("detail").jsonPrimitive.content.contains("IllegalStateException"))
         assertEquals(ToolResultStatus.FAILED, result.resultStatus)
+        assertTrue(requireNotNull(result.clientDiagnostic).detail.contains("IllegalStateException: validator crashed for record 111"))
     }
 
     @Test
@@ -446,6 +467,7 @@ class ToolCallRuntimeTest {
         assertEquals("failed", innerError.getValue("status").jsonPrimitive.content)
         assertEquals("tool_timeout", innerError.getValue("reason").jsonPrimitive.content)
         assertTrue(innerError.getValue("detail").jsonPrimitive.content.isNotBlank())
+        assertTrue(requireNotNull(innerOutcome.clientDiagnostic).detail.contains("TimeoutCancellationException"))
 
         val outer = Tool("outer", "outer", execute = { awaitCancellation() })
         var cancelled = false

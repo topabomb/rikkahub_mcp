@@ -1,6 +1,13 @@
 package net.weero.measix.pilot.service
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +30,7 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.repository.MemoryRepository
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import kotlin.uuid.Uuid
 
 /**
@@ -45,9 +53,12 @@ internal class EnterpriseDataResetService(
     private val catalogs: McpCatalogStore,
     private val files: FileManagementApplicationService,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val scope: CoroutineScope,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
+    private data class ResetTask(val operationId: Uuid, val result: Deferred<Unit>)
+    private var active: ResetTask? = null
     /** Startup sees these reasons only while a foreign pending exit owns the durable CLOSING. */
     private val pendingExitReasons = setOf("enterprise_exit_in_progress", "enterprise_reset_in_progress")
     private val _progress = MutableStateFlow<EnterpriseDataResetProgress?>(null)
@@ -56,23 +67,55 @@ internal class EnterpriseDataResetService(
     /** UI command path: the one-time confirmed request starts a durable, restart-safe reset. */
     suspend fun reset(request: EnterpriseDataResetRequest) {
         recoveryGate.awaitReady()
-        mutex.withLock {
+        val task = mutex.withLock {
+            active?.takeIf { !it.result.isCompleted }?.let {
+                if (it.operationId != request.operationId) {
+                    throw EnterpriseConfigurationException("enterprise_reset_in_progress")
+                }
+                return@withLock it.result
+            }
             if (store.read() != null) throw EnterpriseConfigurationException("enterprise_reset_in_progress")
             val intent = intent(request, freezeScopes())
+            currentCoroutineContext().ensureActive()
             store.write(intent)
-            _progress.value = progressOf(intent)
-            execute(intent, stopDomainWork = true)
+            start(intent)
         }
+        task.await()
     }
 
-    /** UI retry path: a retained intent with a stable failure resumes from its recorded stage. */
+    /** Retry joins the current worker or resumes the retained intent from its recorded stage. */
     suspend fun retryReset() {
         recoveryGate.awaitReady()
-        mutex.withLock {
-            val intent = store.read() ?: run { _progress.value = null; return@withLock }
-            _progress.value = progressOf(intent)
-            execute(intent, stopDomainWork = true)
+        val task = mutex.withLock {
+            active?.takeIf { !it.result.isCompleted }?.let { return@withLock it.result }
+            val intent = store.read() ?: run { _progress.value = null; return@withLock null }
+            start(intent)
         }
+        task?.await()
+    }
+
+    /** The intent has committed; only this application's worker now owns its continuation. */
+    private fun start(intent: EnterpriseDataResetIntent): Deferred<Unit> {
+        val operationId = Uuid.parse(intent.operationId)
+        val acceptedProgress = progressOf(intent)
+        _progress.value = acceptedProgress
+        val result = CompletableDeferred<Unit>()
+        val worker = scope.async(start = CoroutineStart.LAZY) { execute(intent, stopDomainWork = true) }
+        active = ResetTask(operationId, result)
+        worker.invokeOnCompletion { error ->
+            // Includes cancellation before the worker starts. A retained intent is pending, never a
+            // cancelled-page failure. It can resume in this process or in startup recovery.
+            _progress.compareAndSet(acceptedProgress, acceptedProgress.copy(running = false))
+            // Publish pending before allowing another attempt; an old completion cannot overwrite
+            // the running projection of a retry with the same operation ID.
+            when (error) {
+                null -> result.complete(Unit)
+                is CancellationException -> result.cancel(error)
+                else -> result.completeExceptionally(error)
+            }
+        }
+        worker.start()
+        return result
     }
 
     /**
@@ -108,10 +151,16 @@ internal class EnterpriseDataResetService(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            logDiagnosticFailure("EnterpriseDataReset", "Local data reset failed", error)
             // The durable intent and its stage are retained; completion is never faked. The latest
             // published stage is reused so the failure projection never lags the persisted fact.
             _progress.value = (_progress.value ?: progressOf(intent)).copy(failure = reason(error))
             throw error
+        } finally {
+            val current = _progress.value
+            if (current?.operationId?.toString() == intent.operationId) {
+                _progress.value = current.copy(running = false)
+            }
         }
     }
 
@@ -246,6 +295,7 @@ internal class EnterpriseDataResetService(
         mode = intent.mode,
         stage = intent.stage,
         failure = null,
+        running = true,
     )
 
     private fun reason(error: Exception): String = when (error) {

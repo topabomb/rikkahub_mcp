@@ -29,6 +29,72 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class TurnRequestAdmissionTest {
+    @Test fun `regenerating application USER history retains origins without user templates or clocks`() = runTest {
+        for (summary in listOf(false, true)) {
+            for (background in listOf(false, true)) {
+                val fixture = Fixture()
+                val appNode = fixture.snapshot.nodes.first()
+                val source = if (summary) ConversationContextSource.HistorySummary(null, "saved summary prompt")
+                    else ConversationContextSource.Preset(fixture.assistant.id, 0)
+                val origin = messageOriginEntry(appNode, source)
+                val original = fixture.snapshot.copy(
+                    nodes = listOf(appNode, MessageNode.of(UIMessage.user("later real input")),
+                        MessageNode.of(UIMessage.assistant("old reply"))),
+                    modelContextEntries = listOf(origin),
+                )
+                fixture.snapshot = ConversationTransition.apply(original, TruncateToNodeIndex(0))
+                val start = TurnTransition.buildStartTurnCommand(fixture.snapshot, Uuid.random(),
+                    assistantMessageId = fixture.response.id, epoch = 1)
+                fixture.snapshot = ConversationTransition.apply(fixture.snapshot, start)
+                fixture.handle = TurnHandle(fixture.snapshot.conversationId, 1, start.turnId, start.assistantMessageId)
+                if (background) {
+                    val reference = me.rerere.common.configuration.ConfigurationReference.parse("managed~dep_example~asd_example")
+                        as me.rerere.common.configuration.ConfigurationReference.Enterprise
+                    fixture.snapshot = fixture.snapshot.copy(
+                        header = fixture.snapshot.header.copy(scope = ConfigurationScope.Enterprise(reference.authority, "user")),
+                        opening = ConversationOpening(assistant = reference, releaseId = "release", generation = 1, snapshotHash = "hash",
+                            definition = net.weero.measix.pilot.data.enterprise.EnterpriseStarter("starter", "asd_example", "Title", "Prompt",
+                                openingSnapshot = net.weero.measix.pilot.data.enterprise.EnterpriseStarterOpeningSnapshot(1, "system", listOf(
+                                    net.weero.measix.pilot.data.enterprise.EnterpriseStarterInitialContext("context", "literal {{message}} background"))))),
+                    )
+                }
+                fixture.context = fixture.context.copy(promptInputs = fixture.context.promptInputs.copy(
+                    enableTimeReminder = true, messageTemplate = "USER-TEMPLATE {{ message }}"))
+                val beforeAdmission = fixture.snapshot
+                try {
+                    fixture.admit(applyTemplate = true, failAssembly = true)
+                    fail("assembly rejection must propagate")
+                } catch (error: IllegalStateException) {
+                    assertEquals("request_rejected", error.message)
+                }
+                assertEquals(beforeAdmission, fixture.snapshot)
+                fixture.admit(applyTemplate = true)
+                assertEquals(origin, fixture.snapshot.modelContextEntries.single { it.id == origin.id })
+                assertTrue(fixture.snapshot.modelContextEntries.none { it.payload.source is ConversationContextSource.MessageTime })
+                val appInput = fixture.output.single { it.id == appNode.currentMessage.id }
+                assertFalse(appInput.toText().contains("USER-TEMPLATE"))
+                assertFalse(appInput.toText().contains("time_reminder"))
+                assertEquals(summary, appInput.toText().contains("conversation_history_summary"))
+                assertEquals(background, appInput.toText().contains("literal {{message}} background"))
+                val committed = fixture.snapshot
+                val sent = fixture.output.map { it.toText() }
+                fixture.admit(applyTemplate = true)
+                assertEquals(committed, fixture.snapshot)
+                assertEquals(sent, fixture.output.map { it.toText() })
+                assertEquals(listOf(appNode.currentMessage.id, start.assistantMessageId), fixture.snapshot.currentMessages().map { it.id })
+            }
+        }
+    }
+
+    @Test fun `legacy untagged USER history retains its existing user interpretation`() = runTest {
+        val fixture = Fixture()
+        fixture.context = fixture.context.copy(promptInputs = fixture.context.promptInputs.copy(
+            enableTimeReminder = true, messageTemplate = "USER-TEMPLATE {{ message }}"))
+        fixture.admit(applyTemplate = true)
+        assertTrue(fixture.output.single { it.id == fixture.user.id }.toText().contains("USER-TEMPLATE"))
+        assertTrue(fixture.snapshot.modelContextEntries.any { it.payload.source is ConversationContextSource.MessageTime })
+    }
+
     @Test fun `predecessor deletion recalculates gap but retains the message first admitted zone`() = runTest {
         val predecessor = UIMessage.user("earlier").copy(createdAt = LocalDateTime.parse("2026-09-27T10:00:00"))
         val fixture = Fixture(predecessor = predecessor)
@@ -190,7 +256,7 @@ class TurnRequestAdmissionTest {
             }
         }
 
-        suspend fun admit(includeDocument: Boolean = false, failAssembly: Boolean = false) {
+        suspend fun admit(includeDocument: Boolean = false, failAssembly: Boolean = false, applyTemplate: Boolean = false) {
             val step = snapshot.nodes.last().currentMessage.parts.filterIsInstance<UIMessagePart.Step>().last()
             val admission = TurnRequestAdmission(context, access.read(), access, handle, step.stepId,
                 RequestContextPlanner(), artifacts)
@@ -213,8 +279,11 @@ class TurnRequestAdmissionTest {
                     message.copy(parts = listOf(message.parts.first(), derived, document))
                 }
             }
-            val timed = TimeReminderTransformer.transform(TransformerContext(context.realmAccess, mockk(), model,
-                context.assistant, context.promptInputs, origins, registerUnpublishedResource = {}), transformed)
+            val transformerContext = TransformerContext(context.realmAccess, mockk(), model,
+                context.assistant, context.promptInputs, origins, registerUnpublishedResource = {})
+            val templated = if (applyTemplate) net.weero.measix.pilot.data.ai.transformers.TemplateTransformer(
+                io.pebbletemplates.pebble.PebbleEngine.Builder().build()).transform(transformerContext, transformed) else transformed
+            val timed = TimeReminderTransformer.transform(transformerContext, templated)
             output = admission.admit(plan, timed, origins) {
                 check(!failAssembly) { "request_rejected" }
                 it

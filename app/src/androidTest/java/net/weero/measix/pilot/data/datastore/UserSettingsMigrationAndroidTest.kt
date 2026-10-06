@@ -19,7 +19,13 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
 import me.rerere.common.configuration.EnterpriseAuthority
+import me.rerere.common.configuration.RetiredLocalEnterpriseIdentity
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -30,6 +36,60 @@ import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
 class UserSettingsMigrationAndroidTest {
+    @Test
+    fun principalMigrationRollsBackThenPreservesRetiredIdentityAndOpaqueBodiesAfterReopen() = runBlocking {
+        val file = testFile()
+        val original = UserSettingsDocument.empty()
+        val tree = JsonInstant.parseToJsonElement(JsonInstant.encodeToString(original)).jsonObject
+        val preferences = tree.getValue("preferences").jsonObject
+        fun scope(source: String) = JsonInstant.parseToJsonElement("""{
+            "scope":{"type":"enterprise","authority":{"sourceNamespace":"$source:example","deploymentId":"dep_example"},"userId":"usr_example"},
+            "selections":{"assistantId":"managed~$source~example~dep_example~asd_example"},
+            "assistantUsage":[{"assistantId":"managed~$source~example~dep_example~asd_example",
+                "messageTemplate":{"value":"managed~local~example~dep_example~mdl_example"},
+                "customBodies":{"value":[{"key":"opaque","value":{"sourceNamespace":{"nested":"platform:example"},"deploymentId":["dep_example"]}}]}}]
+        }""").jsonObject
+        val local = scope("local")
+        val raw = JsonObject(tree + ("preferences" to JsonObject(preferences + ("scopes" to JsonArray(
+            preferences.getValue("scopes").jsonArray + local + scope("platform"),
+        ))))).toString()
+        val migration = EnterprisePrincipalPreferencesMigration(SettingsStore.USER_SETTINGS,
+            LegacyEnterprisePrincipalEncoding::migrateSettingsJson)
+        val reject = object : DataMigration<Preferences> {
+            override suspend fun shouldMigrate(currentData: Preferences) = true
+            override suspend fun migrate(currentData: Preferences): Preferences = error("reject principal commit")
+            override suspend fun cleanUp() = Unit
+        }
+        try {
+            withStore(file, false) { store -> store.edit { it[SettingsStore.USER_SETTINGS] = raw } }
+            val before = file.readBytes()
+            withStore(file, false, listOf(migration, UserSettingsMigration(), reject)) { store ->
+                try { store.data.first(); error("Expected failed commit") }
+                catch (expected: IllegalStateException) { assertEquals("reject principal commit", expected.message) }
+            }
+            assertTrue(before.contentEquals(file.readBytes()))
+            var committed: String? = null
+            withStore(file, false, listOf(migration, UserSettingsMigration())) { store ->
+                committed = store.data.first()[SettingsStore.USER_SETTINGS]!!
+                val document = JsonInstant.decodeFromString<UserSettingsDocument>(committed!!)
+                assertEquals(original.preferences.scopes.first(), document.preferences.scopes.first())
+                val retired = document.preferences.scopes[1].scope as ConfigurationScope.Enterprise
+                assertEquals("local:example" to "dep_example", RetiredLocalEnterpriseIdentity.decode(retired.authority.deploymentId))
+                assertTrue(retired != document.preferences.scopes[2].scope)
+                val savedUsage = JsonInstant.parseToJsonElement(committed!!).jsonObject.getValue("preferences").jsonObject
+                    .getValue("scopes").jsonArray[1].jsonObject.getValue("assistantUsage").jsonArray.single().jsonObject
+                val oldUsage = local.getValue("assistantUsage").jsonArray.single().jsonObject
+                assertEquals(oldUsage["messageTemplate"], savedUsage["messageTemplate"])
+                assertEquals(oldUsage["customBodies"], savedUsage["customBodies"])
+            }
+            val after = file.readBytes()
+            withStore(file, false, listOf(migration, UserSettingsMigration())) { store ->
+                assertEquals(committed, store.data.first()[SettingsStore.USER_SETTINGS])
+            }
+            assertTrue(after.contentEquals(file.readBytes()))
+        } finally { file.delete() }
+    }
+
     @Test
     fun navigationPreferenceAdoptsPersonalOnlyAndPreservesOtherPreferencesAfterReopen() = runBlocking {
         val file = testFile()

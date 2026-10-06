@@ -16,6 +16,9 @@ ConversationPresentation 的有序消息、阶段和预览能力
 渲染只消费查询投影，不修改持久消息、选择分支或工具状态。流式投影保留其他 variants 与 selectIndex；
 `visualTransform()` 只改变显示，不能代替输入转换或终态提交。工具以 `localCallId` 作为 UI 身份，
 运行与交互使用 `ToolLivePhase`，不能从 Provider call ID、列表位置或 output 是否为空推断。
+`Tool.clientDiagnostic` 是结果检查点保存的脱敏客户端诊断。普通工具详情、归档结果详情和子助手卡片提供
+同一展开/复制入口；`ask_user` 专用交互卡片也披露保存的诊断。入口不依赖 output 或可回放结果是否存在，
+诊断不进入 Provider 请求。
 
 `groupMessageParts` 将连续推理和普通工具合成 `ThinkingBlock`；`assistant_call` 单独形成
 `SubAssistantCallBlock`，正文和媒体使用 `ContentBlock`。普通 `UIMessagePart.Step` 不显示也不切断折叠时间线；

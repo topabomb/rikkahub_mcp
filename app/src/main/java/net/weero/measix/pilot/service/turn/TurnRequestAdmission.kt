@@ -269,15 +269,20 @@ internal class TurnRequestAdmission(
                 }
             }
         }
-        val firstUser = plan.messages.firstOrNull { origins.isRealUser(it) }
-            ?: error("context_request_requires_real_user")
         val newProjections = mutableListOf<ModelContextProjection>()
         snapshot.opening?.let { opening ->
             val blocks = requireNotNull(opening.definition.openingSnapshot).initialContexts
             if (blocks.isNotEmpty()) {
+                // Authorship governs templates and clocks, not the protocol container for
+                // application context. Regeneration may retain only presets or summaries.
+                val container = plan.messages.firstOrNull { origins.isRealUser(it) }
+                    ?: plan.messages.firstOrNull {
+                        it.role == MessageRole.USER && origins.isApplicationHistory(it.id)
+                    }
+                    ?: error("context_opening_requires_user_container")
                 val entry = content(ConversationContextPayload(version = payloadVersion, source = ConversationContextSource.Starter,
                     body = ConversationContextBody.Opening))
-                val placement = ContextPlacement.MessagePart(locators.getValue(firstUser.id).contextLocator(), 0)
+                val placement = ContextPlacement.MessagePart(locators.getValue(container.id).contextLocator(), 0)
                 val text = renderStarterContext(requireNotNull(opening.definition.openingSnapshot), entry.payload.version)
                 newProjections += ModelContextProjection(entry.id, owner, MessageRole.USER, placement, text, entry.payload.source, entry.payload.version)
                 use(entry, MessageRole.USER, placement)

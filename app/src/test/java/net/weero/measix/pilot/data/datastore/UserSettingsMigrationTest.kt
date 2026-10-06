@@ -10,6 +10,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.GatewayPreference
 import net.weero.measix.pilot.data.configuration.LegacyEnterprisePrincipalEncoding
@@ -26,7 +29,7 @@ class UserSettingsMigrationTest {
     @Test
     fun `enterprise principal migration removes URL source from scopes and references exactly once`() = runTest {
         val hash = "a".repeat(64)
-        val encoded = """{"preferences":{"scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"user"},"reference":"managed~platform~$hash~dep_example~mdl_example"}}"""
+        val encoded = """{"preferences":{"scopes":[{"scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"user"},"selections":{"chatModelId":"managed~platform~$hash~dep_example~mdl_example"}}]}}"""
         val before = mutablePreferencesOf(SettingsStore.USER_SETTINGS to encoded)
         val migration = EnterprisePrincipalPreferencesMigration(
             SettingsStore.USER_SETTINGS,
@@ -38,6 +41,84 @@ class UserSettingsMigrationTest {
         assertFalse(migrated.contains("sourceNamespace"))
         assertTrue(migrated.contains("managed~dep_example~mdl_example"))
         assertFalse(migration.shouldMigrate(after))
+    }
+
+    @Test
+    fun `settings migration rewrites only schema identity slots including preset tool metadata`() {
+        val reference = "managed~platform~abc~dep_example~mdl_example"
+        val current = "managed~dep_example~mdl_example"
+        val raw = """{"configuration":{"opaque":"$reference"},"preferences":{"common":{"opaque":"$reference"},"scopes":[{
+            "scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:abc","deploymentId":"dep_example"},"userId":"user"},
+            "selections":{"chatModelId":"$reference","unknown":"$reference"},
+            "assistantUsage":[{"assistantId":"$reference","chatModelId":{"value":"$reference"},
+                "tags":{"value":["$reference"]},"additionalSubAssistantIds":["$reference"],
+                "messageTemplate":{"value":"$reference"},"enabledSkills":{"value":["$reference"]},
+                "regexes":{"value":[{"id":"$reference","findRegex":"$reference","replaceString":"$reference"}]},
+                "customHeaders":{"value":[{"name":"$reference","value":"$reference"}]},
+                "customBodies":{"value":[{"key":"body","value":{"sourceNamespace":"platform:abc","deploymentId":"dep_example"}},
+                    {"key":"nested","value":{"sourceNamespace":{"opaque":"$reference"},"deploymentId":["$reference"]}}]},
+                "presetMessages":{"value":[{"modelId":"$reference","providerMetadata":{"modelId":"$reference"},
+                    "parts":[{"type":"text","text":"$reference"},{"type":"tool","input":"$reference",
+                        "metadata":{"sub_assistant_call":{"target_assistant_id":"$reference","summary":"$reference"}},
+                        "output":[{"type":"text","text":"$reference"}]}]}]}}],
+            "gateways":[{"gateway":"$reference","opaque":"$reference"}]}]}}""".trimIndent()
+        val before = JsonInstant.parseToJsonElement(raw).jsonObject
+        val migrated = requireNotNull(LegacyEnterprisePrincipalEncoding.migrateSettingsJson(raw))
+        val after = JsonInstant.parseToJsonElement(migrated).jsonObject
+        assertEquals(before["configuration"], after["configuration"])
+        val originalPreferences = before.getValue("preferences").jsonObject
+        val preferences = after.getValue("preferences").jsonObject
+        assertEquals(originalPreferences["common"], preferences["common"])
+        val oldScope = originalPreferences.getValue("scopes").jsonArray.single().jsonObject
+        val scope = preferences.getValue("scopes").jsonArray.single().jsonObject
+        assertEquals(JsonPrimitive(current), scope.getValue("selections").jsonObject["chatModelId"])
+        assertEquals(JsonPrimitive(reference), scope.getValue("selections").jsonObject["unknown"])
+        val oldUsage = oldScope.getValue("assistantUsage").jsonArray.single().jsonObject
+        val usage = scope.getValue("assistantUsage").jsonArray.single().jsonObject
+        listOf("messageTemplate", "enabledSkills", "customHeaders", "customBodies").forEach {
+            assertEquals(oldUsage[it], usage[it])
+        }
+        assertEquals(JsonPrimitive(current), usage["assistantId"])
+        assertEquals(JsonPrimitive(current), usage.getValue("chatModelId").jsonObject["value"])
+        val regex = usage.getValue("regexes").jsonObject.getValue("value").jsonArray.single().jsonObject
+        assertEquals(JsonPrimitive(current), regex["id"])
+        assertEquals(JsonPrimitive(reference), regex["findRegex"])
+        assertEquals(JsonPrimitive(reference), regex["replaceString"])
+        val preset = usage.getValue("presetMessages").jsonObject.getValue("value").jsonArray.single().jsonObject
+        assertEquals(JsonPrimitive(current), preset["modelId"])
+        val parts = preset.getValue("parts").jsonArray
+        assertEquals(JsonPrimitive(reference), parts[0].jsonObject["text"])
+        val tool = parts[1].jsonObject
+        assertEquals(JsonPrimitive(current), tool.getValue("metadata").jsonObject.getValue("sub_assistant_call").jsonObject["target_assistant_id"])
+        assertEquals(JsonPrimitive(reference), tool["input"])
+        assertEquals(JsonPrimitive(reference), tool.getValue("output").jsonArray.single().jsonObject["text"])
+        assertEquals(null, LegacyEnterprisePrincipalEncoding.migrateSettingsJson(migrated))
+    }
+
+    @Test
+    fun `retired local preferences decode preserve personal settings and cannot merge with platform`() {
+        val original = UserSettingsDocument.empty().withPersonalSettings(golden())
+        val encoded = JsonInstant.parseToJsonElement(JsonInstant.encodeToString(original)).jsonObject
+        val preferences = encoded.getValue("preferences").jsonObject
+        fun legacy(source: String) = JsonInstant.parseToJsonElement("""{
+            "scope":{"type":"enterprise","authority":{"sourceNamespace":"$source:example","deploymentId":"dep_example"},"userId":"usr_example"},
+            "selections":{"assistantId":"managed~$source~example~dep_example~asd_example"},
+            "assistantUsage":[],"gateways":[]}""").jsonObject
+        val raw = JsonObject(encoded + ("preferences" to JsonObject(preferences + ("scopes" to JsonArray(
+            preferences.getValue("scopes").jsonArray + legacy("local") + legacy("platform"),
+        ))))).toString()
+        val migrated = requireNotNull(LegacyEnterprisePrincipalEncoding.migrateSettingsJson(raw))
+        val restored = JsonInstant.decodeFromString<UserSettingsDocument>(migrated)
+        assertEquals(JsonInstant.encodeToString(original.personalSettings()), JsonInstant.encodeToString(restored.personalSettings()))
+        val retired = restored.preferences.scopes[1]
+        val platform = restored.preferences.scopes[2]
+        val retiredScope = retired.scope as ConfigurationScope.Enterprise
+        assertEquals("local:example" to "dep_example",
+            me.rerere.common.configuration.RetiredLocalEnterpriseIdentity.decode(retiredScope.authority.deploymentId))
+        assertTrue(retired.scope != platform.scope)
+        assertTrue(retired.selections.assistantId != platform.selections.assistantId)
+        assertEquals(retiredScope.authority, (retired.selections.assistantId as ConfigurationReference.Enterprise).authority)
+        assertEquals(null, LegacyEnterprisePrincipalEncoding.migrateSettingsJson(migrated))
     }
 
     @Test

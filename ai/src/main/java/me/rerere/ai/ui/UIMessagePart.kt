@@ -93,6 +93,8 @@ sealed class UIMessagePart {
         val resultStatus: ToolResultStatus? = null,
         val runtimeState: ToolRuntimeState = ToolRuntimeState(ToolOutputPolicy.ARCHIVABLE_TEXT),
         override val metadata: JsonObject? = null,
+        /** Sanitized local failure detail; persisted with the result and excluded from model input. */
+        val clientDiagnostic: ToolClientDiagnostic? = null,
     ) : UIMessagePart() {
         /**
          * Whether a provider-replayable tool result exists.
@@ -134,6 +136,7 @@ sealed class UIMessagePart {
                 interactionState = interactionState,
                 resultStatus = resultStatus ?: other.resultStatus,
                 runtimeState = runtimeState,
+                clientDiagnostic = clientDiagnostic ?: other.clientDiagnostic,
                 metadata = mergePartMetadata(metadata, other.metadata),
             )
         }

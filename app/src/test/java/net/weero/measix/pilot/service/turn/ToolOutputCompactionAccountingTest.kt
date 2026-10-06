@@ -18,7 +18,11 @@ import org.junit.Test
 class ToolOutputCompactionAccountingTest {
     @Test
     fun `one non-empty archive batch increments the owning turn exactly once`() {
-        val message = assistantWithTwoTools()
+        val original = assistantWithTwoTools()
+        val message = original.copy(parts = original.parts.map { part ->
+            if (part is UIMessagePart.Tool) part.copy(clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic(
+                "original full diagnostic " + "x".repeat(500))) else part
+        })
         val replacements = (0..1).associate { ordinal ->
             val tool = message.getTools()[ordinal]
             ToolCallLocator(message.id, tool.stepId, tool.localCallId) to ToolOutputStore.CompactionReplacement(
@@ -34,6 +38,10 @@ class ToolOutputCompactionAccountingTest {
 
         val checkpoint = applyToolOutputCompactionBatchToCheckpoint(listOf(message), replacements).single()
 
+        val reloaded = kotlinx.serialization.json.Json.decodeFromString(UIMessage.serializer(),
+            kotlinx.serialization.json.Json.encodeToString(UIMessage.serializer(), checkpoint))
+        assertEquals(message.getTools().map { it.clientDiagnostic }, reloaded.getTools().map { it.clientDiagnostic })
+        assertEquals(checkpoint.getTools().map { it.runtimeState.archive }, reloaded.getTools().map { it.runtimeState.archive })
         assertEquals(1, checkpoint.usage?.successfulToolOutputCompactionBatchCount)
         assertEquals(listOf("archived-0", "archived-1"), checkpoint.getTools().map {
             (it.output.single() as UIMessagePart.Text).text

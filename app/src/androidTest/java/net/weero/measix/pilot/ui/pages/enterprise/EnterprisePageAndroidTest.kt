@@ -642,6 +642,27 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun pendingResetCanRetryWithoutDisplayingCancellationAsFailure() {
+        val pending = net.weero.measix.pilot.data.enterprise.EnterpriseDataResetProgress(
+            operationId = Uuid.random(),
+            mode = net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode.KEEP_HISTORY,
+            stage = net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStage.DOMAINS_CLOSED,
+            failure = null,
+            running = false,
+        )
+        val fixture = Fixture(overview().copy(reset = pending))
+        coEvery { fixture.service.retryLocalDataReset() } coAnswers {
+            fixture.state.value = fixture.state.value.copy(reset = pending.copy(running = true))
+        }
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_reset_failed)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.application_recovery_retry)).assertIsDisplayed().performClick()
+        compose.onNodeWithText(text(R.string.enterprise_reset_progress)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.application_recovery_retry)).assertDoesNotExist()
+        coVerify(exactly = 1) { fixture.service.retryLocalDataReset() }
+    }
+
+    @Test
     fun replacementSessionAfterStateRestorationCannotReturnToThePreviousChat() {
         val original = overview()
         val request = ConversationOpenRequest.NewDraft(

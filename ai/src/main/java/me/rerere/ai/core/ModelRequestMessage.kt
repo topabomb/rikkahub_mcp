@@ -13,7 +13,7 @@ import me.rerere.ai.ui.partsToText
  * Produced exclusively by the app-layer `RequestAssembler` from the durable `UIMessage` projection.
  * It carries just the wire-relevant facts and drops every durable-only field (id, timestamps,
  * usage, terminal outcome): [role], model-visible [parts] with durable boundaries
- * ([UIMessagePart.Step]) already removed at assembly time, the lossless replay [providerMetadata],
+ * ([UIMessagePart.Step]) and Tool client diagnostics already removed at assembly time, the lossless replay [providerMetadata],
  * and the request-only [providerReplayProjection]. No adapter re-derives transcript semantics or
  * drops parts itself.
  */
@@ -28,6 +28,9 @@ data class ModelRequestMessage(
         // Durable transcript boundaries never reach the Provider; the assembler drops them before construction.
         require(parts.none { it is UIMessagePart.Step }) {
             "ModelRequestMessage must not carry UIMessagePart.Step"
+        }
+        require(parts.none(::hasClientDiagnostic)) {
+            "ModelRequestMessage must not carry Tool client diagnostics"
         }
     }
 
@@ -54,3 +57,6 @@ data class ModelRequestMessage(
         )
     }
 }
+
+private fun hasClientDiagnostic(part: UIMessagePart): Boolean = part is UIMessagePart.Tool &&
+    (part.clientDiagnostic != null || part.output.any(::hasClientDiagnostic))

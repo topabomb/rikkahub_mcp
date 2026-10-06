@@ -30,6 +30,21 @@ class ConfigurationReferenceTest {
     }
 
     @Test
+    fun `retired local wire identity is reversible isolated and valid at maximum legacy lengths`() {
+        val source = "local:" + "a".repeat(128)
+        val deployment = "d".repeat(256)
+        val retired = RetiredLocalEnterpriseIdentity.encode(source, deployment)
+        assertEquals(source to deployment, RetiredLocalEnterpriseIdentity.decode(retired))
+        val reference: ConfigurationReference = ConfigurationReference.Enterprise(EnterpriseAuthority(retired), "mdl_one")
+        assertEquals(reference, Json.decodeFromString<ConfigurationReference>(Json.encodeToString(reference)))
+        assertNotEquals(reference, ConfigurationReference.Enterprise(EnterpriseAuthority(deployment), "mdl_one"))
+        assertNotEquals(retired, RetiredLocalEnterpriseIdentity.encode("local:other", deployment))
+        assertThrows(IllegalArgumentException::class.java) { EnterpriseAuthority("retired-local.invalid") }
+        assertThrows(IllegalArgumentException::class.java) { EnterpriseAuthority(retired + "=") }
+        assertThrows(IllegalArgumentException::class.java) { EnterpriseAuthority("x".repeat(257)) }
+    }
+
+    @Test
     fun `invalid or ambiguous enterprise identities are rejected`() {
         listOf(
             "managed~dep~mdl_one~extra",

@@ -337,7 +337,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
         _resetConfirmation.value = null
         command { service.localDataReset(original.request); onReset() }
     }
-    fun retryReset() { if (overview.value?.reset?.failure != null) command { service.retryLocalDataReset() } }
+    fun retryReset() { if (overview.value?.reset?.running == false) command { service.retryLocalDataReset() } }
     fun showPortal() { overview.value?.selection?.let {
         _error.value = null
         _notice.value = null

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -330,17 +331,22 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             content = {
                 CompositionLocalProvider(LocalToaster provides modalToaster) {
                     Box(modifier = Modifier.fillMaxWidth()) {
-                        val projection = outputProjection
-                        if (projection is ToolOutputProjection.Archived) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                GatewayActionDetails(displayTool)
-                                ArchivedToolOutputDetails(projection)
+                        Column {
+                            displayTool.clientDiagnostic?.let { diagnostic ->
+                                DiagnosticDisclosure(detail = diagnostic.detail, modifier = Modifier.padding(horizontal = 16.dp))
                             }
-                        } else {
-                            renderer.Preview(
-                                context = context,
-                                onDismissRequest = { showResult = false },
-                            )
+                            val projection = outputProjection
+                            if (projection is ToolOutputProjection.Archived) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    GatewayActionDetails(displayTool)
+                                    ArchivedToolOutputDetails(projection)
+                                }
+                            } else {
+                                renderer.Preview(
+                                    context = context,
+                                    onDismissRequest = { showResult = false },
+                                )
+                            }
                         }
                         Toaster(
                             state = modalToaster,
@@ -441,6 +447,7 @@ private fun ChainOfThoughtScope.AskUserQuestionContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                tool.clientDiagnostic?.let { DiagnosticDisclosure(detail = it.detail) }
                 questions.forEach { q ->
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(

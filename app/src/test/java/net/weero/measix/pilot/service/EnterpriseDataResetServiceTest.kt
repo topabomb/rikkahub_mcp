@@ -7,9 +7,12 @@ import io.mockk.mockk
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -36,6 +39,113 @@ import kotlin.uuid.Uuid
 @Config(sdk = [34])
 class EnterpriseDataResetServiceTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `leaving page cancels only its wait and retries join the accepted worker`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            val scope = f.enroll(sessions)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.catalogs.clearEnterpriseScope(scope) } coAnswers {
+                entered.complete(Unit)
+                release.await()
+            }
+            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.CLEAR_ALL)
+            val page = async { reset.reset(request) }
+            entered.await()
+            page.cancel()
+            page.join()
+            assertEquals(request.operationId.toString(), f.store.read()?.operationId)
+            assertTrue(requireNotNull(reset.progress.value).running)
+            assertNull(reset.progress.value?.failure)
+            val retry = async { reset.retryReset() }
+            val repeated = async { reset.reset(request) }
+            runCurrent()
+            assertFalse(retry.isCompleted)
+            assertFalse(repeated.isCompleted)
+            release.complete(Unit)
+            retry.await()
+            repeated.await()
+            coVerify(exactly = 1) { f.catalogs.clearEnterpriseScope(scope) }
+            coVerify(exactly = 1) { f.conversations.clearEnterpriseScope(scope) }
+            assertNull(f.store.read())
+            assertNull(reset.progress.value)
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+        }
+    }
+
+    @Test fun `worker cancellation is pending without failure and original intent retries in process`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            val scope = f.enroll(sessions)
+            coEvery { f.catalogs.clearEnterpriseScope(scope) } throws CancellationException("worker stopped")
+            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.CLEAR_ALL)
+            try { reset.reset(request); fail("Expected cancellation") }
+            catch (_: CancellationException) { }
+            assertFalse(requireNotNull(reset.progress.value).running)
+            assertNull(reset.progress.value?.failure)
+            assertEquals(request.operationId.toString(), f.store.read()?.operationId)
+            coEvery { f.catalogs.clearEnterpriseScope(scope) } returns Unit
+            reset.retryReset()
+            assertNull(f.store.read())
+            assertNull(reset.progress.value)
+        }
+    }
+
+    @Test fun `cancellation before acceptance leaves no reset intent`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            f.enroll(sessions)
+            val enumerating = CompletableDeferred<Unit>()
+            coEvery { f.conversations.enterpriseScopes() } coAnswers {
+                enumerating.complete(Unit)
+                CompletableDeferred<Set<ConfigurationScope.Enterprise>>().await()
+            }
+            val page = async { f.reset(reset, EnterpriseDataResetMode.CLEAR_ALL) }
+            enumerating.await()
+            page.cancel()
+            page.join()
+            assertNull(f.store.read())
+            assertNull(reset.progress.value)
+            coVerify(exactly = 0) { f.catalogs.clearEnterpriseScope(any()) }
+        }
+    }
+
+    @Test fun `application shutdown before worker starts preserves pending intent for startup`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            f.enroll(sessions)
+            f.workerScope.coroutineContext[Job]?.cancel()
+            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.KEEP_HISTORY)
+            try { reset.reset(request); fail("Expected application shutdown") }
+            catch (_: CancellationException) { }
+            assertEquals(request.operationId.toString(), f.store.read()?.operationId)
+            assertFalse(requireNotNull(reset.progress.value).running)
+            assertNull(reset.progress.value?.failure)
+            coVerify(exactly = 0) { f.catalogs.clearEnterpriseScope(any()) }
+            val (restarted, resume) = f.restart()
+            resume.resumePending()
+            assertNull(f.store.read())
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, (restarted.state.value as EnterpriseState.Available).manifest.phase)
+        }
+    }
+
+    @Test fun `cancellation during final scope read cannot accept a reset`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            f.enroll(sessions)
+            coEvery { f.catalogs.enterpriseScopes() } coAnswers {
+                currentCoroutineContext()[Job]?.cancel()
+                emptySet()
+            }
+            val page = async { f.reset(reset, EnterpriseDataResetMode.CLEAR_ALL) }
+            try { page.await(); fail("Expected cancellation before acceptance") }
+            catch (_: CancellationException) { }
+            assertNull(f.store.read())
+            assertNull(reset.progress.value)
+            coVerify(exactly = 0) { f.catalogs.clearEnterpriseScope(any()) }
+        }
+    }
 
     @Test fun `corrupt durable intent fails closed and remains available for diagnosis`() {
         val root = temporary.newFolder()
@@ -400,15 +510,19 @@ class EnterpriseDataResetServiceTest {
     }
 
     private suspend fun TestScope.fixture(block: suspend (Fixture) -> Unit) {
-        val f = Fixture()
-        try { block(f) } finally { f.scope.coroutineContext[Job]?.cancel() }
+        val f = Fixture(this)
+        try { block(f) } finally {
+            f.scope.coroutineContext[Job]?.cancel()
+            f.workerScope.coroutineContext[Job]?.cancel()
+        }
     }
 
-    private inner class Fixture {
+    private inner class Fixture(testScope: TestScope) {
         val root = temporary.newFolder()
         // The reset tests call the close barrier directly; keep the unrelated expiry observer on an
         // independent scheduler so runTest cannot auto-advance a multi-year platform Session to expiry.
         val scope: CoroutineScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher())
+        val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScope.testScheduler))
         var now = 1000L
         var logoutCalls = 0
         var frozenScopes: Set<ConfigurationScope.Enterprise> = emptySet()
@@ -463,7 +577,7 @@ class EnterpriseDataResetServiceTest {
                 identityData = mockk(relaxed = true),
                 remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = { logoutCalls++ })
             val reset = EnterpriseDataResetService(store, sessions, exits, conversations, settings, memories,
-                catalogs, files, gate) { now }
+                catalogs, files, gate, workerScope) { now }
             return Triple(sessions, exits, reset)
         }
 
@@ -474,7 +588,7 @@ class EnterpriseDataResetServiceTest {
         fun restart(): Pair<EnterpriseSessionController, EnterpriseDataResetService> {
             val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root)) { now }
             val reset = EnterpriseDataResetService(store, sessions, mockk(), conversations, settings,
-                memories, catalogs, files, ApplicationRecoveryGate().apply { ready() }) { now }
+                memories, catalogs, files, ApplicationRecoveryGate().apply { ready() }, workerScope) { now }
             return sessions to reset
         }
 

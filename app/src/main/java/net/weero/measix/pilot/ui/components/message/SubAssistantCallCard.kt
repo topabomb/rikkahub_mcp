@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.message
 
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -380,6 +381,7 @@ fun SubAssistantCallCard(
                 }
 
                 val interaction = metadata.userInteraction
+                tool.clientDiagnostic?.let { DiagnosticDisclosure(detail = it.detail) }
                 if (isRunning && interaction != null) {
                     // typed UserInput 交互区必须消费点击事件，防止冒泡到 Card 的 navigateToDetail。
                     // OutlinedTextField 不像 FilterChip 那样通过 Modifier.clickable 消费事件，
@@ -454,6 +456,7 @@ private fun SubAssistantCallCardFallback(
                 text = stringResource(R.string.sub_assistant_call_title),
                 style = MaterialTheme.typography.titleSmall,
             )
+            tool.clientDiagnostic?.let { DiagnosticDisclosure(detail = it.detail) }
             if (tool.hasReplayResult) {
                 val fields = parseSubAssistantToolResultFields(tool, JsonInstant)
                 val rawOutput = tool.output.filterIsInstance<UIMessagePart.Text>()

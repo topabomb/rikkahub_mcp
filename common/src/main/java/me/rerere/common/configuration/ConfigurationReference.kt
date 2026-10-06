@@ -13,7 +13,9 @@ data class EnterpriseAuthority(
     val deploymentId: String,
 ) {
     init {
-        require(deploymentId.matches(Regex("[A-Za-z0-9._-]{1,256}"))) { "invalid_deployment_id" }
+        require(if (RetiredLocalEnterpriseIdentity.isReserved(deploymentId)) {
+            try { RetiredLocalEnterpriseIdentity.decode(deploymentId); true } catch (_: IllegalArgumentException) { false }
+        } else deploymentId.matches(Regex("[A-Za-z0-9._-]{1,256}"))) { "invalid_deployment_id" }
     }
 }
 

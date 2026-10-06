@@ -22,11 +22,14 @@ import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.core.ToolMetadataDelivery
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.core.ToolResourceLease
+import me.rerere.ai.ui.ToolClientDiagnostic
 import me.rerere.ai.ui.ToolInteractionState
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.ToolRuntimeState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.ToolResultFact
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
 
 /** Tool Runtime 的稳定 Logcat tag。 */
@@ -137,6 +140,7 @@ internal data class ToolCallOutcome(
     val resultStatus: ToolResultStatus,
     /** Typed output policy resolved once at completion; drives rolling-compaction eligibility. */
     val outputPolicy: ToolOutputPolicy,
+    val clientDiagnostic: ToolClientDiagnostic? = null,
 )
 
 /** Unexpected failure of a Runtime-owned capability handed to a Tool; never a Tool result. */
@@ -167,11 +171,16 @@ internal class ToolCallRuntime(
             val locator = ToolCallLocator(messageId, tool.stepId, tool.localCallId)
             val capturedRequirement = tool.interactionState.capturedRequirement()
 
-            fun reject(output: List<UIMessagePart>, wasPending: Boolean) {
+            fun reject(
+                output: List<UIMessagePart>,
+                wasPending: Boolean,
+                clientDiagnostic: ToolClientDiagnostic? = null,
+            ) {
                 replacements[tool.localCallId] = tool.copy(
                     output = output,
                     interactionState = if (wasPending) ToolInteractionState.NotRequired else tool.interactionState,
                     resultStatus = ToolResultStatus.FAILED,
+                    clientDiagnostic = clientDiagnostic,
                     runtimeState = ToolRuntimeState(definition?.outputPolicy ?: ToolOutputPolicy.PRESERVE),
                 )
                 immediateResults += ToolResultFact(locator = locator, status = ToolResultStatus.FAILED)
@@ -181,12 +190,13 @@ internal class ToolCallRuntime(
                 if (error is ToolRuntimeInfrastructureException) throw error
                 net.weero.measix.pilot.data.enterprise.ManagedSnapshotRequired.find(error)?.let { throw it }
                 net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error)?.let { throw it }
-                Log.w(TAG, "Tool ${tool.toolName} preparation failed: ${error.message}", error)
+                logDiagnosticFailure(TAG, "Tool ${tool.toolName} preparation failed", error)
                 reject(
                     listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
                         "failed", "runtime_error", ToolErrorProtocol.exceptionDetail(error),
                     ).toString())),
                     wasPending = tool.isPending,
+                    clientDiagnostic = ToolClientDiagnostic(error.userVisibleDiagnostic()),
                 )
             }
 
@@ -450,26 +460,28 @@ internal class ToolCallRuntime(
         } catch (timeout: TimeoutCancellationException) {
             // 外层 Turn/collector 超时属于取消，只有工具内部子超时且父协程仍 active 才归一化为工具失败。
             currentCoroutineContext().ensureActive()
-            Log.w(TAG, "Tool ${call.source.toolName} timed out: ${timeout.message}")
+            logDiagnosticFailure(TAG, "Tool ${call.source.toolName} timed out", timeout)
             ToolCallOutcome(
                 output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
                     "failed", "tool_timeout", timeout.message?.takeIf(String::isNotBlank) ?: "Tool execution timed out.",
                 ).toString())),
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
+                clientDiagnostic = ToolClientDiagnostic(timeout.userVisibleDiagnostic()),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (infrastructure: ToolRuntimeInfrastructureException) {
             throw infrastructure
         } catch (error: Exception) {
-            Log.w(TAG, "Tool ${call.source.toolName} failed: ${error.message}", error)
+            logDiagnosticFailure(TAG, "Tool ${call.source.toolName} failed", error)
             ToolCallOutcome(
                 output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
                     "failed", "runtime_error", ToolErrorProtocol.exceptionDetail(error),
                 ).toString())),
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
+                clientDiagnostic = ToolClientDiagnostic(error.userVisibleDiagnostic()),
             )
         }
     }

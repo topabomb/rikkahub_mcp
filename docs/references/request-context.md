@@ -133,6 +133,9 @@ Tool execution 的校验拒绝也是未执行。没有原 Turn 记录的失败�
 预置/摘要来源。`ContextPlacement` 区分 System、BeforeMessage、MessagePart、BeforeStep、
 MessageOrigin 和 Omitted。MessagePart 保存最终请求的 part 偏移，附件 source 另存原始 part 偏移。
 新预置与摘要以 `MessageReference` 指向自身 immutable variant，不复制原文、不猜测历史来源。
+真实用户身份只决定用户模板与时间语义，不是应用上下文的协议容器要求。摘要或预置 USER 重生成可保留仅含
+应用历史的前缀；Starter 背景优先放入窗口中的首个真实 USER，无真实 USER 时放入首个带应用来源的 USER。
+容器的 Preset/HistorySummary 来源保持不变，背景独立保存 Starter 来源；没有背景时不要求真实 USER。
 
 规则与时间/文档文本保存原输入和实际文本；已接纳文档复用原文，时间沿原消息时间、真实 USER 前驱与
 首次渲染时区复用。只读取本次窗口需要的 Artifact。非 disclosure 正文超过 64 KiB 时通过

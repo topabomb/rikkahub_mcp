@@ -23,6 +23,8 @@ internal object EnterpriseConfigurationCodec {
     internal val json = Json { encodeDefaults = true }
 
     fun validateIdentity(identity: EnterpriseIdentity) {
+        check(!me.rerere.common.configuration.RetiredLocalEnterpriseIdentity.isReserved(identity.authority.deploymentId),
+            "retired_local_enterprise_identity")
         listOf(identity.authority.deploymentId, identity.userId).forEach {
             check(it.codePointCount(0, it.length) in 1..128, "invalid_enterprise_identity_length")
         }
