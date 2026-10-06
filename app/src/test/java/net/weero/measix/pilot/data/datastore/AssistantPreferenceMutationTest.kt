@@ -2,6 +2,8 @@ package net.weero.measix.pilot.data.datastore
 
 import net.weero.measix.pilot.data.configuration.*
 import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
+import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -104,13 +106,13 @@ class AssistantPreferenceMutationTest {
         val packet = exampleEnterprisePackage()
         val assistant = packet.configuration.assistants.first()
         val ref = packet.identity.reference(assistant.id)
-        val fixed = packet.identity.reference(assistant.mcpServerIds.first())
+        val fixed = packet.identity.reference(assistant.mcpBindings.map { it.mcpServerId }.first())
         val document = UserSettingsDocument.empty()
         val updated = document.changeAssistantPreference(packet.identity.scope, appliedConfiguration(packet), ref,
             AssistantPreferenceChange.Mcp(fixed, true))
         assertEquals(document, updated)
         val unbound = packet.copy(configuration = packet.configuration.copy(assistants = packet.configuration.assistants.map {
-            if (it.id == assistant.id) it.copy(mcpServerIds = emptyList()) else it
+            if (it.id == assistant.id) it.copy(mcpBindings = emptyList()) else it
         }))
         assertFalse(ConfigurationResolver.resolve(updated, packet.identity.scope, appliedConfiguration(unbound)).assistants.getValue(ref).mcpServers.contains(fixed))
     }
@@ -120,7 +122,7 @@ class AssistantPreferenceMutationTest {
         val packet = exampleEnterprisePackage()
         val assistant = packet.configuration.assistants.first()
         val ref = packet.identity.reference(assistant.id)
-        val fixed = packet.identity.reference(assistant.mcpServerIds.first())
+        val fixed = packet.identity.reference(assistant.mcpBindings.map { it.mcpServerId }.first())
         val absent = packet.identity.reference("mcp_removed")
         val document = UserSettingsDocument.empty().let { it.copy(preferences = it.preferences.withAssistantUsage(packet.identity.scope,
             AssistantUsagePreferences(ref, mcpServers = UsageValue(setOf(fixed, absent))))) }
@@ -128,6 +130,47 @@ class AssistantPreferenceMutationTest {
             AssistantPreferenceChange.Mcp(absent, false))
         assertEquals(setOf(fixed), updated.preferences.assistantUsage(packet.identity.scope, ref)!!.mcpServers!!.value)
         assertEquals(document.configuration, updated.configuration)
+
+        val first = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "first"), url = "https://first.test/mcp")
+        val second = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "second"), url = "https://second.test/mcp")
+        val disabled = packet.configuration.mcpServers.first().copy(id = "mcp_disabled", enabled = false)
+        val available = packet.copy(configuration = packet.configuration.copy(
+            policy = packet.configuration.policy.copy(allowLocalMcp = true), mcpServers = packet.configuration.mcpServers + disabled))
+        val state = appliedConfiguration(available)
+        for (stale in listOf(absent, packet.identity.reference(disabled.id))) {
+            val stored = UserSettingsDocument.empty().let { it.copy(
+                configuration = it.configuration.copy(mcpServers = listOf(first, second)),
+                preferences = it.preferences.withAssistantUsage(packet.identity.scope, AssistantUsagePreferences(ref,
+                    temperature = UsageValue(0.6f), mcpServers = UsageValue(setOf(fixed, stale, first.id))))) }
+            val baseline = ConfigurationResolver.resolve(stored, packet.identity.scope, state).assistants.getValue(ref)
+            assertFalse(stale in baseline.mcpServers)
+            listOf(AssistantPreferenceChange.Mcp(second.id, true), AssistantPreferenceChange.Mcp(first.id, false),
+                AssistantPreferenceChange.EditUsage(baseline, baseline.copy(mcpServers = baseline.mcpServers + second.id)),
+                AssistantPreferenceChange.EditUsage(baseline, baseline.copy(mcpServers = baseline.mcpServers - first.id))).forEach { change ->
+                val edited = stored.changeAssistantPreference(packet.identity.scope, state, ref, change)
+                val usage = edited.preferences.assistantUsage(packet.identity.scope, ref)!!
+                assertEquals(UsageValue<Float?>(0.6f), usage.temperature)
+                assertTrue(stale in usage.mcpServers!!.value)
+                assertFalse(stale in ConfigurationResolver.resolve(edited, packet.identity.scope, state).assistants.getValue(ref).mcpServers)
+                assertEquals(stored.configuration, edited.configuration)
+            }
+        }
+    }
+
+    @Test fun `enterprise assistant commands cannot add an unbound managed server`() {
+        val original = exampleEnterprisePackage()
+        val extra = original.configuration.mcpServers.first().copy(id = "mcp_${kotlin.uuid.Uuid.random()}")
+        val packet = original.copy(configuration = original.configuration.copy(mcpServers = original.configuration.mcpServers + extra))
+        val document = UserSettingsDocument.empty()
+        val id = packet.identity.reference(packet.configuration.assistants.first().id)
+        val baseline = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet)).assistants.getValue(id)
+        val reference = packet.identity.reference(extra.id)
+        listOf(AssistantPreferenceChange.Mcp(reference, true),
+            AssistantPreferenceChange.EditUsage(baseline, baseline.copy(mcpServers = baseline.mcpServers + reference))).forEach { change ->
+            assertEquals("enterprise_assistant_mcp_binding_missing", assertThrows(IllegalArgumentException::class.java) {
+                document.changeAssistantPreference(packet.identity.scope, appliedConfiguration(packet), id, change)
+            }.message)
+        }
     }
 
     @Test
@@ -177,7 +220,7 @@ class AssistantPreferenceMutationTest {
         val document = UserSettingsDocument.empty()
         val baseline = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet)).assistants.getValue(id)
         val withoutBinding = packet.copy(configuration = packet.configuration.copy(assistants = packet.configuration.assistants.map {
-            if (packet.identity.reference(it.id) == id) it.copy(mcpServerIds = emptyList()) else it
+            if (packet.identity.reference(it.id) == id) it.copy(mcpBindings = emptyList()) else it
         }))
         val edited = document.changeAssistantPreference(packet.identity.scope, appliedConfiguration(withoutBinding), id,
             AssistantPreferenceChange.EditUsage(baseline, baseline.copy(temperature = 0.7f)))

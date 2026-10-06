@@ -800,7 +800,7 @@
   <string name="setting_mcp_page_name">이름</string>
   <string name="setting_mcp_page_name_desc">MCP 서버의 표시 이름</string>
   <string name="setting_mcp_page_name_placeholder">예: 내 MCP 서버</string>
-  <string name="setting_mcp_page_needs_approval">승인 필요</string>
+  <string name="setting_mcp_page_needs_approval">실행 전 확인</string>
   <string name="setting_mcp_page_no_mcp_servers_found">MCP 서버를 찾을 수 없습니다</string>
   <string name="setting_mcp_page_save">저장</string>
   <string name="setting_mcp_page_server_url">서버 URL</string>
@@ -1721,9 +1721,9 @@
   <string name="mcp_enterprise_definitions">기업 도구</string>
   <string name="mcp_gateway">게이트웨이</string>
   <string name="mcp_shared_definition_notice">정의를 변경하면 해당 정의를 사용하는 모든 공간에 적용됩니다.</string>
-  <string name="mcp_enterprise_read_only">기업 도구는 읽기 전용입니다. 처음 사용한 후 검색된 도구 목록을 확인할 수 있습니다.</string>
+  <string name="mcp_enterprise_read_only">읽기 전용</string>
   <string name="mcp_gateway_preference_hint">모든 게이트웨이 도구를 함께 켜거나 끕니다. 변경 사항은 새로운 상호작용에 적용됩니다.</string>
-  <string name="mcp_enterprise_required">기업에서 사용하도록 지정함</string>
+  <string name="mcp_enterprise_required">필수 활성화</string>
   <string name="speech_operation_unavailable">음성을 사용할 수 없습니다. 선택한 리소스와 공간을 확인하세요.</string>
   <string name="enterprise_selection_changed">공간이 변경되었습니다. 설정 파일을 다시 선택하세요.</string>
   <string name="backup_personal_scope_notice">사용자 설정과 개인 공간의 데이터를 백업합니다. 기업 설정과 데이터는 포함되지 않으며 복원 시에도 유지됩니다.</string>
@@ -2115,4 +2115,18 @@
   <string name="file_large_plain_text">텍스트가 커서 구문 강조 표시가 비활성화되었습니다.</string>
   <string name="chat_message_tool_inspect_assistant">어시스턴트 설정 확인</string>
   <string name="file_long_lines_no_wrap">긴 줄은 가로로 스와이프하여 읽을 수 있습니다.</string>
+  <string name="mcp_managed_all_tools">모든 서버 도구</string>
+  <string name="mcp_managed_approved_tools">승인된 도구</string>
+  <string name="mcp_assistant_all_tools">허용된 모든 도구</string>
+  <string name="mcp_assistant_selected_tools">지정된 도구</string>
+  <string name="mcp_managed_empty_directory">현재 제공되는 도구 없음</string>
+  <string name="mcp_tool_not_allowed">기업 미승인</string>
+  <string name="mcp_tool_not_selected">이 어시스턴트에서 선택하지 않음</string>
+  <string name="mcp_tool_missing">서버에 없는 도구. 관리자에게 문의하세요</string>
+  <string name="mcp_tool_contract_changed">정의가 변경됨. 관리자 재게시 필요</string>
+  <string name="mcp_tool_directory_unavailable">처음 사용할 때 연결</string>
+  <string name="mcp_assistant_fixed_binding">어시스턴트 고정</string>
+  <string name="mcp_tools_partially_available">%1$d개 사용 가능 · %2$d개 관리자 조치 필요</string>
+  <string name="mcp_tools_count">도구 %1$d개</string>
+  <string name="modal_drag_handle">드래그 핸들</string>
 </resources>

@@ -53,7 +53,9 @@ class PlatformMcpProtocolTest {
         val interaction = "int_${Uuid.random()}"
         val definition = McpConnectionDefinition.ManagedPlatform(RealmAccess.Enterprise(identity.scope, "ses_${Uuid.random()}"),
             identity.reference(resource), "test", source, PlatformMcpDefinitionAuthOwnership.NONE,
-            EnterpriseAppliedVersion(Uuid.random().toString(), 42, "config", "execution"), interaction) { token.get() }
+            EnterpriseAppliedVersion(Uuid.random().toString(), 42, "config", "execution"), interaction,
+            EnterpriseMcpResource(resource, "test", authOwnership = PlatformMcpDefinitionAuthOwnership.NONE,
+                toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALL, allowedTools = emptyList())) { token.get() }
         val fingerprint = definition.connectionFingerprint()
         val digest = definition.mcpDefinitionDigest()
         val http = HttpClient(OkHttp)

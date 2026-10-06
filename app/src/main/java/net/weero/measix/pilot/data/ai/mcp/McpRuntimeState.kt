@@ -58,9 +58,38 @@ internal class McpRuntimeStateStore {
     fun publish(runtime: McpServerRuntime, capability: McpRuntimeCapability) {
         synchronized(lock) {
             if (runtimes[runtime.key] !== runtime) return
-            _capabilities.update { it + (runtime.key to capability) }
+            _capabilities.update { previous ->
+                val own = capability.catalog?.let { incoming ->
+                    val retained = previous[runtime.key]?.catalog?.takeIf {
+                        it.samePublication(incoming) && it.revision > incoming.revision
+                    }
+                    capability.withCatalog(retained ?: incoming)
+                } ?: capability
+                val next = previous + (runtime.key to own)
+                val shared = own.catalog?.takeIf { it.managed != null }
+                if (shared == null) next else next.mapValues { (_, peer) ->
+                    val known = peer.catalog
+                    if (known != null && known.samePublication(shared) && known.revision < shared.revision) {
+                        peer.withCatalog(shared)
+                    } else peer
+                }
+            }
         }
     }
+
+    private fun McpCatalogSnapshot.samePublication(other: McpCatalogSnapshot): Boolean =
+        key == other.key && definitionDigest == other.definitionDigest && managed == other.managed
+
+    // Confirmed managed directory changes reach existing peers before a later publication can
+    // replace the durable head. Connection health and callability remain owned by each runtime.
+    private fun McpRuntimeCapability.withCatalog(snapshot: McpCatalogSnapshot): McpRuntimeCapability = copy(
+        catalog = snapshot,
+        status = when (val health = status) {
+            is McpStatus.Ready -> health.copy(toolCount = snapshot.tools.size, catalogRevision = snapshot.revision)
+            is McpStatus.CatalogStale -> health.copy(lastKnownGoodCount = snapshot.tools.size, catalogRevision = snapshot.revision)
+            else -> health
+        },
+    )
 
     fun remove(runtime: McpServerRuntime): Boolean = synchronized(lock) {
         if (runtimes[runtime.key] !== runtime) return@synchronized false

@@ -1105,17 +1105,19 @@ class PlatformSessionNetworkTest {
         } finally { server.stop(0) }
     }
 
-    @Test fun `changed generation preflight only rejects and explicit synchronization restores execution`() = runBlocking {
+    @Test fun `invalid sync preserves Applied and response extensions allow explicit recovery`() = runBlocking {
         val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
         val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
         val nextBody = JsonObject(PlatformWireCodec.json.parseToJsonElement(fixture("v4-full")).jsonObject + mapOf(
             "managedGeneration" to JsonPrimitive(base.managedGeneration + 1),
             "releaseId" to JsonPrimitive("rel_00000000-0000-4000-8000-000000000099"),
+            "futureInfo" to JsonObject(mapOf("note" to JsonPrimitive("new Core response field"))),
         ) - "snapshotHash")
         val hash = MessageDigest.getInstance("SHA-256").digest(nextBody.toString().toByteArray())
             .joinToString("") { "%02x".format(it) }
         val nextRaw = JsonObject(nextBody + ("snapshotHash" to JsonPrimitive("sha256:$hash"))).toString()
         val next = PlatformWireCodec.decode<PlatformManagedSnapshot>(nextRaw)
+        val invalidSnapshot = AtomicBoolean(true)
         val activeGeneration = AtomicReference(next.managedGeneration)
         val appliedReported = AtomicBoolean(false)
         val stateReads = AtomicInteger()
@@ -1137,7 +1139,9 @@ class PlatformSessionNetworkTest {
                 "/api/client/v1/managed/snapshots/${next.managedGeneration}" -> {
                     snapshotReads.incrementAndGet()
                     responseHeaders.set("ETag", "\"${next.snapshotHash}\"")
-                    reply(200, nextRaw)
+                    reply(200, if (invalidSnapshot.get()) JsonObject(
+                        Json.parseToJsonElement(nextRaw).jsonObject + ("managedGeneration" to JsonPrimitive("private-marker")),
+                    ).toString() else nextRaw)
                 }
                 "/api/client/v1/managed/applied" -> {
                     reports.incrementAndGet()
@@ -1169,18 +1173,27 @@ class PlatformSessionNetworkTest {
             assertEquals(0, snapshotReads.get())
             assertEquals(0, reports.get())
 
+            val invalid = runCatching { platform.synchronize(access) }.exceptionOrNull()
+            assertTrue(invalid is EnterpriseSnapshotContentException)
+            assertTrue(invalid!!.message.orEmpty().contains("$.managedGeneration"))
+            assertFalse(invalid.message.orEmpty().contains("private-marker"))
+            val retained = (sessions.state.value as EnterpriseState.Available).manifest
+            assertEquals(old.manifest.applied, retained.applied)
+            assertEquals(sessionId, retained.session?.id)
+            assertEquals(0, reports.get())
+            invalidSnapshot.set(false)
             val updated = platform.synchronize(access)
             assertEquals(next.managedGeneration, updated.manifest.applied?.generation)
             assertEquals(updated.manifest.applied, platform.prepareExecution(access))
             assertEquals(3, stateReads.get())
-            assertEquals(1, bootstrapReads.get())
-            assertEquals(1, snapshotReads.get())
+            assertEquals(2, bootstrapReads.get())
+            assertEquals(2, snapshotReads.get())
             assertEquals(1, reports.get())
 
             activeGeneration.set(0L)
             val noConfiguration = runCatching { platform.prepareExecution(access) }.exceptionOrNull() as EnterpriseConfigurationException
             assertEquals("enterprise_configuration_not_ready", noConfiguration.reason)
-            assertEquals(1, snapshotReads.get())
+            assertEquals(2, snapshotReads.get())
             assertEquals(updated.manifest.applied, (sessions.state.value as EnterpriseState.Available).manifest.applied)
         } finally { server.stop(0) }
     }

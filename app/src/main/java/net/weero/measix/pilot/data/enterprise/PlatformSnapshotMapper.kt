@@ -36,7 +36,7 @@ internal object PlatformSnapshotMapper {
         snapshot.assistants.forEach { assistant ->
             require(assistant.displayName.isNotBlank() && assistant.systemPrompt.isNotBlank()) { "invalid_platform_assistant" }
             require(models[assistant.modelId]?.enabled == true) { "invalid_platform_assistant_model" }
-            require(assistant.mcpServerIds.all { mcp[it]?.enabled == true }) { "invalid_platform_assistant_mcp" }
+            require(assistant.mcpBindings.all { mcp[it.mcpServerId]?.enabled == true }) { "invalid_platform_assistant_mcp" }
             require(assistant.memorySeed.all { it.isNotBlank() }) { "empty_platform_memory_seed" }
         }
         snapshot.starters.forEach {
@@ -135,10 +135,10 @@ internal object PlatformSnapshotMapper {
                 sampleRate = value.sampleRate?.checkedInt(), vadThreshold = value.vadThreshold,
                 silenceDurationMs = value.silenceDurationMs?.checkedInt(), prefixPaddingMs = value.prefixPaddingMs?.checkedInt(), prompt = value.prompt,
             ).also(EnterpriseAsrResource::validate) },
-            mcpServers = snapshot.mcp.map { EnterpriseMcpResource(it.mcpServerId, it.displayName, it.enabled, it.authOwnership) },
+            mcpServers = snapshot.mcp.map { EnterpriseMcpResource(it.mcpServerId, it.displayName, it.enabled, it.authOwnership, it.toolAccessMode, it.allowedTools) },
             assistants = snapshot.assistants.map { value -> EnterpriseAssistant(
                 value.assistantDefinitionId, value.displayName, value.description.orEmpty(), value.modelId, value.systemPrompt,
-                value.mcpServerIds.distinct(), value.memorySeed.indices.map { seedId(value.assistantDefinitionId, it) }, value.enabled,
+                value.mcpBindings, value.memorySeed.indices.map { seedId(value.assistantDefinitionId, it) }, value.enabled,
             ) },
             memorySeeds = snapshot.assistants.flatMap { assistant -> assistant.memorySeed.mapIndexed { index, text ->
                 EnterpriseMemorySeed(seedId(assistant.assistantDefinitionId, index), text)

@@ -26,7 +26,7 @@ internal fun requireAssistantUsageWriteAllowed(
         )
     }
     if (proposed.mcpServers != before?.mcpServers) {
-        val previous = previousResolved.assistants[assistantId]?.mcpServers.orEmpty()
+        val previous = before?.mcpServers?.value ?: previousResolved.assistants[assistantId]?.mcpServers.orEmpty()
         (proposed.mcpServers?.value.orEmpty() - previous).forEach { requireSelectable(ConfigurationCategory.MCP, it) }
     }
     (proposed.additionalSubAssistantIds - before?.additionalSubAssistantIds.orEmpty()).forEach { id ->

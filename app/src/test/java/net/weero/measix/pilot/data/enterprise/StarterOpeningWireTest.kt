@@ -23,6 +23,11 @@ class StarterOpeningWireTest {
         val opening = starterOpeningMock()
         val wire = PlatformWireCodec.decode<PlatformAssistantStarterDefinition>(raw(opening))
         assertEquals(opening, PlatformWireCodec.json.encodeToJsonElement(wire).jsonObject.getValue("openingSnapshot"))
+        val extended = JsonObject(opening + ("extra" to JsonPrimitive(true)) +
+            ("initialContexts" to JsonArray(opening.getValue("initialContexts").jsonArray.map {
+                JsonObject(it.jsonObject + ("title" to JsonPrimitive("\t")))
+            })))
+        assertEquals(wire, PlatformWireCodec.decode<PlatformAssistantStarterDefinition>(raw(extended)))
         val empty = buildJsonObject {
             put("format", 1)
             put("systemPrompt", "")
@@ -43,11 +48,9 @@ class StarterOpeningWireTest {
             JsonObject(opening + ("format" to JsonPrimitive("1"))),
             JsonObject(opening + ("systemPrompt" to JsonNull)),
             JsonObject(opening + ("initialContexts" to JsonNull)),
-            JsonObject(opening + ("extra" to JsonPrimitive(true))),
             JsonObject(opening + ("initialContexts" to JsonArray(listOf(blocks.first(), blocks.first())))),
             JsonObject(opening + ("initialContexts" to JsonArray(listOf(JsonObject(blocks.first().jsonObject - "content"))))),
             JsonObject(opening + ("initialContexts" to JsonArray(listOf(JsonObject(blocks.first().jsonObject + ("id" to JsonPrimitive(" \n"))))))),
-            JsonObject(opening + ("initialContexts" to JsonArray(listOf(JsonObject(blocks.first().jsonObject + ("title" to JsonPrimitive("\t"))))))),
         )
         invalid.forEach { value ->
             assertThrows(value.toString(), IllegalArgumentException::class.java) {

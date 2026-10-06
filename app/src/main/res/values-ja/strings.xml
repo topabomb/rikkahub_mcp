@@ -800,7 +800,7 @@
   <string name="setting_mcp_page_name">名前</string>
   <string name="setting_mcp_page_name_desc">MCPサーバーの表示名</string>
   <string name="setting_mcp_page_name_placeholder">例：My MCP Server</string>
-  <string name="setting_mcp_page_needs_approval">承認が必要</string>
+  <string name="setting_mcp_page_needs_approval">実行前に確認</string>
   <string name="setting_mcp_page_no_mcp_servers_found">MCPサーバーが見つかりません</string>
   <string name="setting_mcp_page_save">保存</string>
   <string name="setting_mcp_page_server_url">サーバーURL</string>
@@ -1721,9 +1721,9 @@
   <string name="mcp_enterprise_definitions">企業ツール</string>
   <string name="mcp_gateway">ゲートウェイ</string>
   <string name="mcp_shared_definition_notice">定義の変更は、それを使用するすべてのスペースに適用されます。</string>
-  <string name="mcp_enterprise_read_only">企業のツールは読み取り専用です。初回使用後に検出されたツール一覧を確認できます。</string>
+  <string name="mcp_enterprise_read_only">読み取り専用</string>
   <string name="mcp_gateway_preference_hint">ゲートウェイの全ツールをまとめて切り替えます。変更は新しいやり取りに適用されます。</string>
-  <string name="mcp_enterprise_required">企業により有効化が必須</string>
+  <string name="mcp_enterprise_required">有効化必須</string>
   <string name="speech_operation_unavailable">音声を利用できません。選択したリソースとスペースを確認してください。</string>
   <string name="enterprise_selection_changed">スペースが変更されました。設定ファイルを選び直してください。</string>
   <string name="backup_personal_scope_notice">ユーザー設定と個人スペースのデータをバックアップします。企業の設定とデータは含まれず、復元時にも保持されます。</string>
@@ -2115,4 +2115,18 @@
   <string name="file_large_plain_text">テキストが大きいため、構文の強調表示を無効にしています。</string>
   <string name="chat_message_tool_inspect_assistant">アシスタント設定を確認</string>
   <string name="file_long_lines_no_wrap">長い行は横にスワイプして読めます。</string>
+  <string name="mcp_managed_all_tools">全サーバーツール</string>
+  <string name="mcp_managed_approved_tools">承認済みツール</string>
+  <string name="mcp_assistant_all_tools">許可された全ツール</string>
+  <string name="mcp_assistant_selected_tools">指定ツール</string>
+  <string name="mcp_managed_empty_directory">現在ツールはありません</string>
+  <string name="mcp_tool_not_allowed">企業の承認なし</string>
+  <string name="mcp_tool_not_selected">このアシスタントでは未選択</string>
+  <string name="mcp_tool_missing">サーバーにツールがありません。管理者に連絡してください</string>
+  <string name="mcp_tool_contract_changed">定義が変更されました。管理者による再公開が必要です</string>
+  <string name="mcp_tool_directory_unavailable">初回利用時に接続</string>
+  <string name="mcp_assistant_fixed_binding">アシスタント固定</string>
+  <string name="mcp_tools_partially_available">%1$d 個が利用可能 · %2$d 個は管理者の対応が必要</string>
+  <string name="mcp_tools_count">%1$d 個のツール</string>
+  <string name="modal_drag_handle">ドラッグハンドル</string>
 </resources>

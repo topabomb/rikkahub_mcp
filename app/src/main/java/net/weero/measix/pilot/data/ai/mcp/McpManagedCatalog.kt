@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.ai.mcp
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import org.erdtman.jcs.JsonCanonicalizer
 
 /** The published generation is independent of connection epochs and catalog discovery revisions. */
@@ -23,18 +24,7 @@ data class McpGatewaySurface(val version: Int, val hash: String) {
         require(tools.map { it.name } == listOf("discover_tools", "invoke_tool")) {
             "Gateway must expose exactly the ordered discover/invoke pair"
         }
-        val bytes = try {
-            val canonical = JsonCanonicalizer(JsonArray(tools.map { it.definition }).toString()).encodedString
-            // JCS requires rejecting lone surrogates; String.getBytes would replace them silently.
-            val encoded = Charsets.UTF_8.newEncoder()
-                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                .encode(java.nio.CharBuffer.wrap(canonical))
-            ByteArray(encoded.remaining()).also { encoded.get(it) }
-        }
-        catch (_: java.io.IOException) { throw IllegalArgumentException("Invalid Gateway canonical surface") }
-        val actual = "sha256:" + MessageDigest.getInstance("SHA-256").digest(bytes)
-            .joinToString("") { "%02x".format(it) }
+        val actual = canonicalMcpContractHash(JsonArray(tools.map { it.definition }))
         require(actual == hash) { "Gateway surface does not match the published hash" }
     }
 }
@@ -53,4 +43,23 @@ internal fun McpCatalogKey.validateManaged(managed: McpManagedCatalog?) {
             }
         }
     }
+}
+
+/** Hash the full Tool, including extensions; never hash a lossy SDK or UI projection. */
+internal fun McpCatalogTool.contractHash(): String = canonicalMcpContractHash(definition)
+
+private fun canonicalMcpContractHash(value: JsonElement): String {
+    val bytes = try {
+        val canonical = JsonCanonicalizer(value.toString()).encodedString
+        // JCS rejects lone surrogates; String.getBytes would silently replace them.
+        val encoded = Charsets.UTF_8.newEncoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .encode(java.nio.CharBuffer.wrap(canonical))
+        ByteArray(encoded.remaining()).also { encoded.get(it) }
+    } catch (error: java.io.IOException) {
+        throw IllegalArgumentException("Invalid MCP canonical contract", error)
+    }
+    return "sha256:" + MessageDigest.getInstance("SHA-256").digest(bytes)
+        .joinToString("") { "%02x".format(it) }
 }

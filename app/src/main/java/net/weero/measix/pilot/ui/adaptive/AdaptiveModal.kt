@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
@@ -29,6 +29,10 @@ import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import net.weero.measix.pilot.R
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -50,7 +54,7 @@ fun AdaptiveModal(
     dialogMaxHeight: Dp = AdaptiveLayoutDefaults.SheetMaxHeight,
     sheetState: SheetState? = null,
     sheetGesturesEnabled: Boolean = true,
-    dragHandle: @Composable (() -> Unit)? = { BottomSheetDefaults.DragHandle() },
+    dragHandle: @Composable (() -> Unit)? = { AdaptiveModalDragHandle() },
     forceDialog: Boolean = false,
     feedback: ToasterState? = null,
     feedbackVisible: Boolean = true,
@@ -138,6 +142,18 @@ fun AdaptiveModal(
             AdaptiveModalContent(modifier, feedback, feedbackVisible, content)
         }
     }
+}
+
+/** The sheet supplies dragging and dismissal semantics; the visible handle needs only a compact inset. */
+@Composable
+private fun AdaptiveModalDragHandle() {
+    val label = stringResource(R.string.modal_drag_handle)
+    Surface(
+        modifier = Modifier.padding(vertical = 10.dp).size(width = 32.dp, height = 4.dp)
+            .semantics { contentDescription = label },
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraLarge,
+    ) {}
 }
 
 /** A caller-owned feedback state is displayed only by its active modal. */

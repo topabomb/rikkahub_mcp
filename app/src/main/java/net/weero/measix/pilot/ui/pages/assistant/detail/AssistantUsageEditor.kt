@@ -85,8 +85,9 @@ internal fun AssistantUsageEditor(
             catch (error: Exception) { onFailure(IllegalStateException(memoryError, error)) }
         }
     }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    val compactMcp = section == AssistantSettingsSection.MCP
+    Column(if (compactMcp) Modifier.fillMaxWidth() else Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compactMcp) 0.dp else 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (section != null) {
                 IconButton(onClick = { section = null }) {
                     Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
@@ -130,7 +131,7 @@ internal fun AssistantUsageEditor(
                 }
             }
         } else {
-            Box(Modifier.weight(1f)) {
+            Box(Modifier.weight(1f, fill = !compactMcp)) {
             key(resetEpoch, section) {
                 val update: (net.weero.measix.pilot.data.model.Assistant) -> Unit = { change(AssistantPreferenceChange.EditUsage(assistant, it)) }
                 when (section) {
@@ -205,7 +206,7 @@ internal fun AssistantUsageEditor(
                         onUpdateMemory = { record -> mutateMemory { memory.update(record) } },
                         onDeleteMemory = { record -> mutateMemory { memory.delete(record) } })
                     AssistantSettingsSection.REQUEST -> AssistantRequestContent(PaddingValues(0.dp), assistant, update)
-                    AssistantSettingsSection.MCP -> McpPicker(mcpChoices, onToggle = { id, enabled -> change(AssistantPreferenceChange.Mcp(id, enabled)) })
+                    AssistantSettingsSection.MCP -> McpPicker(mcpChoices, contentPadding = PaddingValues(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 16.dp), onToggle = { id, enabled -> change(AssistantPreferenceChange.Mcp(id, enabled)) })
                     AssistantSettingsSection.LOCAL_TOOLS -> AssistantLocalToolContent(PaddingValues(0.dp), assistant, configuration.assistants.values.toList(),
                         configuration.imageGenerationAvailable, onToggleLocalTool = { tool, enabled -> change(AssistantPreferenceChange.LocalTool(tool, enabled)) },
                         onUpdateSubAssistantIds = null,

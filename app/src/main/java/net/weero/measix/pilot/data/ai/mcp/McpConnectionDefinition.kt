@@ -38,6 +38,8 @@ internal sealed interface McpConnectionDefinition {
         val authOwnership: net.weero.measix.pilot.data.enterprise.PlatformMcpDefinitionAuthOwnership,
         val version: EnterpriseAppliedVersion,
         val interactionId: String,
+        val toolAccess: net.weero.measix.pilot.data.enterprise.EnterpriseMcpResource,
+        val assistantBinding: net.weero.measix.pilot.data.enterprise.PlatformAssistantMcpBinding? = null,
         private val credential: suspend () -> String,
     ) : McpConnectionDefinition {
         init {
@@ -57,6 +59,12 @@ internal sealed interface McpConnectionDefinition {
         override fun connectionFingerprint() = McpConnectionFingerprint("platform_streamable_http", url, name, publicHeaders)
         override fun mcpDefinitionDigest() = platformMcpDefinitionDigest(id, name, execution, version.generation, authOwnership)
         override fun toolPolicy(name: String): McpToolPolicy? = null
+
+        fun withToolAccess(
+            resource: net.weero.measix.pilot.data.enterprise.EnterpriseMcpResource,
+            binding: net.weero.measix.pilot.data.enterprise.PlatformAssistantMcpBinding?,
+        ) = ManagedPlatform(access, id, name, execution, authOwnership, version, interactionId,
+            resource, binding, credential)
     }
 
 }

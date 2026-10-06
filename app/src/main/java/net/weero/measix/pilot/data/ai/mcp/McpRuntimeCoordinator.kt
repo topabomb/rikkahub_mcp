@@ -338,18 +338,31 @@ class McpRuntimeCoordinator internal constructor(
             val name = configuration.catalog.getValue(net.weero.measix.pilot.data.configuration.ConfigurationKey(category, id)).name
             val catalog = capabilities[id]?.catalog
             val policies = user?.commonOptions?.toolPolicyByName().orEmpty()
-            val enabled = catalog?.tools.orEmpty().filter { policies[it.name]?.enable != false }
-            enabled.forEach { tool ->
+            val resource = configuration.enterpriseConfiguration?.mcpServers?.find { it.id == (id as? ConfigurationReference.Enterprise)?.id }
+            val binding = configuration.enterpriseConfiguration?.assistants?.find { it.id == (assistant.id as? ConfigurationReference.Enterprise)?.id }
+                ?.mcpBindings?.find { it.mcpServerId == (id as? ConfigurationReference.Enterprise)?.id }
+            val enabled = (resource?.toolAccess(catalog?.tools.orEmpty(), binding)
+                ?: catalog?.tools.orEmpty().map { tool -> McpToolAccess(tool.name, tool,
+                    policies[tool.name]?.needsApproval == true, null,
+                    if (policies[tool.name]?.enable == false) McpToolUnavailableReason.NOT_ALLOWED else null) })
+                .filter { it.enabled }
+            enabled.forEach { permission ->
+                val tool = requireNotNull(permission.tool)
                 tools += McpAvailableTool(
                     serverId = id, serverName = name,
                     namespace = if (id is ConfigurationReference.Enterprise) managedMcpNamespace(id) else name,
                     catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest,
                     catalogDigest = catalog.catalogDigest, name = tool.name, description = tool.description,
-                    inputSchema = tool.inputSchema, needsApproval = policies[tool.name]?.needsApproval ?: false,
+                    inputSchema = tool.inputSchema, needsApproval = permission.needsApproval, contractHash = permission.contractHash,
                 )
             }
             McpServerCapabilityOutcome(id, name,
-                if (catalog != null) McpServerCapabilityState.READY else McpServerCapabilityState.UNAVAILABLE, enabled.size)
+                when {
+                    catalog == null -> McpServerCapabilityState.UNAVAILABLE
+                    resource != null && enabled.isEmpty() && resource.toolAccess(catalog.tools, binding).isNotEmpty() ->
+                        McpServerCapabilityState.TOOLS_RESTRICTED
+                    else -> McpServerCapabilityState.READY
+                }, enabled.size)
         }
         return TurnMcpCapabilitySnapshot(tools, outcomes)
     }
@@ -503,9 +516,15 @@ class McpRuntimeCoordinator internal constructor(
                             val current = when {
                                 !allowed -> null
                                 use == McpDefinitionUse.CATALOG_PUBLICATION && state.manifest.applied != original.version -> null
-                                definition.managed != null -> {
+                                definition is McpConnectionDefinition.ManagedPlatform -> {
                                     original.execution
-                                    definition
+                                    val resource = configuration.enterpriseConfiguration?.mcpServers?.find { it.id == definition.id.id }
+                                    val managedAssistant = configuration.enterpriseConfiguration?.assistants?.find {
+                                        it.id == (captured.assistant.id as? ConfigurationReference.Enterprise)?.id
+                                    }
+                                    val binding = managedAssistant?.mcpBindings?.find { it.mcpServerId == definition.id.id }
+                                    if (resource == null || (managedAssistant != null && binding == null)) null
+                                    else definition.withToolAccess(resource, binding)
                                 }
                                 else -> latest.userSettings.mcpServers.find { it.id == definition.id }
                                     ?.let { McpConnectionDefinition.User(it) }
@@ -572,7 +591,10 @@ class McpRuntimeCoordinator internal constructor(
                 is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->
                     val execution = bindings.execution as EnterpriseExecution.Platform
                     add(McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
-                        execution, requireNotNull(definition.authOwnership), bindings.version, interactionId) {
+                        execution, requireNotNull(definition.authOwnership), bindings.version, interactionId,
+                        toolAccess = definition,
+                        assistantBinding = enterprise.assistants.find { it.id == (assistant.id as? ConfigurationReference.Enterprise)?.id }
+                            ?.mcpBindings?.find { it.mcpServerId == id.id }) {
                         check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
                         val token = platform.accessToken(access.sessionId, execution.connection)
                         check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
@@ -594,16 +616,20 @@ class McpRuntimeCoordinator internal constructor(
         val outcomes = definitions.map { definition ->
             val capability = runtimeCapabilities.value[McpRuntimeKey(definition.id, access, interactionId)] ?: McpRuntimeCapability.EMPTY
             val catalog = capability.catalog?.takeIf { it.definitionDigest == definition.mcpDefinitionDigest() }
-            val selected = catalog?.tools.orEmpty().filter { definition.toolPolicy(it.name)?.enable != false }
-            selected.forEach { tool ->
+            val permissions = definition.toolAccess(catalog?.tools.orEmpty())
+            val selected = permissions.filter { it.enabled }
+            selected.forEach { permission ->
+                val tool = requireNotNull(permission.tool)
                 tools += McpAvailableTool(
                     serverId = definition.id, serverName = definition.name, namespace = definition.namespace, interactionId = interactionId,
                     catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest, catalogDigest = catalog.catalogDigest,
                     name = tool.name, description = tool.description, inputSchema = tool.inputSchema,
-                    needsApproval = definition.toolPolicy(tool.name)?.needsApproval ?: false,
+                    needsApproval = permission.needsApproval, contractHash = permission.contractHash,
                 )
             }
             McpServerCapabilityOutcome(definition.id, definition.name, when {
+                catalog != null && definition is McpConnectionDefinition.ManagedPlatform && selected.isEmpty() && permissions.isNotEmpty() ->
+                    McpServerCapabilityState.TOOLS_RESTRICTED
                 catalog != null -> McpServerCapabilityState.READY
                 timedOut -> McpServerCapabilityState.TIMEOUT
                 capability.status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
@@ -628,6 +654,8 @@ class McpRuntimeCoordinator internal constructor(
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
         args: JsonObject,
+        expectedContractHash: String? = null,
+        approvedByUser: Boolean = false,
         onResolvedTool: suspend (JsonObject) -> Unit = {},
         onArtifactCreated: (OwnedArtifact) -> Unit,
     ): List<UIMessagePart> {
@@ -639,6 +667,7 @@ class McpRuntimeCoordinator internal constructor(
             toolName = toolName,
             expectedDefinitionDigest = expectedDefinitionDigest,
             expectedNeedsApproval = expectedNeedsApproval,
+            expectedContractHash = expectedContractHash, approvedByUser = approvedByUser,
         )
         if (admission is McpToolCallAdmission.Rejected) {
             logMcp(admission.serverName, "Tool '$toolName' rejected before commitment: ${admission.message}")
@@ -675,6 +704,7 @@ class McpRuntimeCoordinator internal constructor(
                 toolName = toolName,
                 expectedDefinitionDigest = expectedDefinitionDigest,
                 expectedNeedsApproval = expectedNeedsApproval,
+                expectedContractHash = expectedContractHash, approvedByUser = approvedByUser,
             )
             if (preparation is McpToolCallPreparation.Rejected) {
                 logMcp(

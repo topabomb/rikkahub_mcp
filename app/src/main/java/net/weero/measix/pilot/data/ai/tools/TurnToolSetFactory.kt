@@ -186,6 +186,8 @@ class TurnToolSetFactory(
                                     toolName = tool.name,
                                     expectedDefinitionDigest = tool.definitionDigest,
                                     expectedNeedsApproval = tool.needsApproval,
+                                    expectedContractHash = tool.contractHash,
+                                    approvedByUser = approvedByUser,
                                     args = it.jsonObject,
                                     onResolvedTool = { metadata ->
                                         reportMetadata(kotlinx.serialization.json.buildJsonObject {

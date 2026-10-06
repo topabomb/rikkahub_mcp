@@ -56,6 +56,8 @@ internal data class ConversationConfigurationUiModel(
     val enterpriseName: String?,
     val opening: ConversationOpeningSummary? = null,
     val isDraft: Boolean = false,
+    /** Null names mean the inherited binding selects the full server-authorized directory. */
+    val fixedMcpToolSelections: Map<ConfigurationReference, Set<String>?> = emptyMap(),
 ) {
     val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -78,7 +80,7 @@ internal fun ResolvedConfiguration.conversationConfiguration(
         modelSelection(ModelSelectionRole.IMAGE).isAvailable,
         catalog.values.toList(), assistants, selection(ResourceSelectionSlot.SEARCH),
         (target.assistantId as? ConfigurationReference.Enterprise)?.let { reference ->
-            enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpServerIds
+            enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpBindings?.map { it.mcpServerId }
                 ?.map { ConfigurationReference.Enterprise(reference.authority, it) }?.toSet()
         }.orEmpty(),
         (target.assistantId as? ConfigurationReference.Enterprise)?.takeIf { assistant != null }?.let { reference ->
@@ -92,5 +94,14 @@ internal fun ResolvedConfiguration.conversationConfiguration(
         if (assistant == null) null else assistantModelPreferences.getValue(target.assistantId),
         enterpriseIdentity?.enterpriseName,
         opening, isDraft,
+        (target.assistantId as? ConfigurationReference.Enterprise)?.let { reference ->
+            enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpBindings?.associate { binding ->
+                val id: ConfigurationReference = ConfigurationReference.Enterprise(reference.authority, binding.mcpServerId)
+                id to
+                    binding.toolNames.toSet().takeIf {
+                        binding.toolSelection == net.weero.measix.pilot.data.enterprise.PlatformAssistantMcpBindingToolSelection.ALLOWLIST
+                    }
+            }
+        }.orEmpty(),
     )
 }

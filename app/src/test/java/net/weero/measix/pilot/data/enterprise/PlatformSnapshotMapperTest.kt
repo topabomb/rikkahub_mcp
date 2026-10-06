@@ -2,6 +2,7 @@ package net.weero.measix.pilot.data.enterprise
 
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.runBlocking
+import net.weero.measix.pilot.data.ai.mcp.toolAccess
 import java.security.MessageDigest
 import org.junit.Assert.*
 import org.junit.Rule
@@ -64,13 +65,17 @@ class PlatformSnapshotMapperTest {
     }
 
     @Test fun `Core permitted repeated MCP references bind once in the assistant`() {
-        val original = snapshot()
-        val assistant = original.assistants.first()
-        val reference = assistant.mcpServerIds.first()
-        val repeated = original.copy(assistants = original.assistants.map {
-            if (it.assistantDefinitionId == assistant.assistantDefinitionId) it.copy(mcpServerIds = listOf(reference, reference)) else it
-        })
-        assertEquals(listOf(reference), map(repeated).configuration.assistants.first().mcpServerIds)
+        val original = cases().first { it.jsonObject.getValue("name").jsonPrimitive.content == "v4-full" }
+            .jsonObject.getValue("value").jsonObject
+        val assistants = original.getValue("assistants").jsonArray
+        val first = assistants.first().jsonObject
+        val reference = first.getValue("mcpServerIds").jsonArray.first()
+        val repeated = JsonObject(original + ("assistants" to JsonArray(
+            listOf(JsonObject(first + ("mcpServerIds" to JsonArray(listOf(reference, reference))))) + assistants.drop(1),
+        )))
+        val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(repeated.toString())
+        assertEquals(listOf(reference.jsonPrimitive.content),
+            map(wire).configuration.assistants.first().mcpBindings.map { it.mcpServerId })
     }
 
     @Test fun `system and MiMo design preserve absence rather than fabricate model or voice`() {
@@ -125,10 +130,28 @@ class PlatformSnapshotMapperTest {
         val base = Json.parseToJsonElement(fixture("v4-full")).jsonObject
         shared.forEach { case ->
             val fields = case.jsonObject
-            val content = fields.getValue("content").jsonObject.filterKeys { it in base.keys }
-            val wire = PlatformWireCodec.decode<PlatformManagedSnapshot>(withStarterOpeningMock(JsonObject(base + content + ("schemaVersion" to JsonPrimitive(4))).toString()))
-            if (fields.getValue("expectedCode").jsonPrimitive.content.isEmpty()) map(wire)
-            else assertThrows(fields.getValue("name").jsonPrimitive.content, IllegalArgumentException::class.java) { map(wire) }
+            // Shared reference cases are Admin draft content; only the Client compiler drops reviewed definitions.
+            val content = fields.getValue("content").jsonObject.filterKeys { it in base.keys }.toMutableMap()
+            content["mcp"] = JsonArray((content.getValue("mcp") as JsonArray).map { value ->
+                val server = value.jsonObject
+                val grants = server["allowedTools"] as? JsonArray
+                if (grants == null) server else JsonObject(server + ("allowedTools" to JsonArray(grants.map {
+                    JsonObject(it.jsonObject - "definition")
+                })))
+            })
+            fun consume() = map(PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(base + content).toString()))
+            if (fields.getValue("expectedCode").jsonPrimitive.content.isEmpty()) consume()
+            else if (fields.getValue("name").jsonPrimitive.content == "server-invalid-tool-hash") {
+                // Admin has the reviewed definition; Client receives only the hash and checks it against discovery.
+                val candidate = consume()
+                val draftServer = fields.getValue("content").jsonObject.getValue("mcp").jsonArray.first().jsonObject
+                val discovered = draftServer.getValue("allowedTools").jsonArray.map {
+                    net.weero.measix.pilot.data.ai.mcp.McpCatalogTool(it.jsonObject.getValue("definition").jsonObject)
+                }
+                val access = candidate.configuration.mcpServers.first().toolAccess(discovered)
+                assertTrue(access.none { it.enabled })
+                assertTrue(access.any { it.unavailableReason == net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason.CONTRACT_CHANGED })
+            } else assertThrows(fields.getValue("name").jsonPrimitive.content, IllegalArgumentException::class.java) { consume() }
         }
     }
 
@@ -244,7 +267,7 @@ class PlatformSnapshotMapperTest {
     }
 
     @Test fun `schema five URL-qualified state migrates once without changing principal or session`() {
-        val candidate = map(snapshot("v4-speech"))
+        val candidate = map(snapshot("v4-full"))
         val folder = temporary.newFolder()
         val store = enterpriseTestStore(folder)
         val legacyVersion = store.prepare(candidate)
@@ -269,7 +292,18 @@ class PlatformSnapshotMapperTest {
         val json = EnterpriseConfigurationCodec.json
         val revision = java.io.File(folder, "revisions/${legacyVersion.revision}")
         val currentConfiguration = json.parseToJsonElement(java.io.File(revision, "configuration.json").readText()).jsonObject
-        val legacyConfiguration = legacy(JsonObject(currentConfiguration +
+        val configuration = currentConfiguration.getValue("configuration").jsonObject
+        val oldMcp = JsonObject(configuration + mapOf(
+            "mcpServers" to JsonArray(configuration.getValue("mcpServers").jsonArray.map {
+                JsonObject(it.jsonObject - "toolAccessMode" - "allowedTools")
+            }),
+            "assistants" to JsonArray(configuration.getValue("assistants").jsonArray.map {
+                val assistant = it.jsonObject
+                JsonObject((assistant - "mcpBindings") + ("mcpServerIds" to JsonArray(
+                    assistant.getValue("mcpBindings").jsonArray.map { binding -> binding.jsonObject.getValue("mcpServerId") })))
+            }),
+        ))
+        val legacyConfiguration = legacy(JsonObject(currentConfiguration + ("configuration" to oldMcp) +
             ("identity" to json.encodeToJsonElement(EnterpriseIdentity.serializer(), identity)))).toString().toByteArray()
         val legacyExecution = legacy(buildJsonObject {
             put("revision", legacyVersion.revision)

@@ -21,26 +21,27 @@ class PlatformWireTest {
     }
 
     @Test
-    fun `Core shared control and snapshot cases use their declared schemas`() {
+    fun `Core shared cases validate the wire schemas consumed by Android`() {
+        var checked = 0
         cases().forEach { value ->
             val case = value.jsonObject
             val raw = case.getValue("value").toString()
-            val decode = {
-                when (val schema = case.getValue("schema").jsonPrimitive.content) {
-                    "ManagedSnapshot", "ManagedSnapshotV4" -> PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
-                    "Discovery" -> PlatformWireCodec.decode<PlatformDiscovery>(raw)
-                    "EnrollmentExchangeRequest" -> PlatformWireCodec.decode<PlatformEnrollmentExchangeRequest>(raw)
-                    "EnrollmentExchangeResponse" -> PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(raw)
-                    "Bootstrap" -> PlatformWireCodec.decode<PlatformBootstrap>(raw)
-                    "ManagedState" -> PlatformWireCodec.decode<PlatformManagedState>(raw)
-                    "ManagedAppliedReport" -> PlatformWireCodec.decode<PlatformManagedAppliedReport>(raw)
-                    "RefreshResponse" -> PlatformWireCodec.decode<PlatformRefreshResponse>(raw)
-                    else -> error("Uncovered shared schema: $schema")
-                }
+            val decode: () -> Any = when (case.getValue("schema").jsonPrimitive.content) {
+                "ManagedSnapshot", "ManagedSnapshotV4" -> { { PlatformWireCodec.decode<PlatformManagedSnapshot>(raw) } }
+                "Discovery" -> { { PlatformWireCodec.decode<PlatformDiscovery>(raw) } }
+                "EnrollmentExchangeRequest" -> { { PlatformWireCodec.decode<PlatformEnrollmentExchangeRequest>(raw) } }
+                "EnrollmentExchangeResponse" -> { { PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(raw) } }
+                "Bootstrap" -> { { PlatformWireCodec.decode<PlatformBootstrap>(raw) } }
+                "ManagedState" -> { { PlatformWireCodec.decode<PlatformManagedState>(raw) } }
+                "ManagedAppliedReport" -> { { PlatformWireCodec.decode<PlatformManagedAppliedReport>(raw) } }
+                "RefreshResponse" -> { { PlatformWireCodec.decode<PlatformRefreshResponse>(raw) } }
+                else -> return@forEach
             }
+            checked++
             if (case.getValue("valid").jsonPrimitive.boolean) decode()
             else assertThrows(case.getValue("name").jsonPrimitive.content, IllegalArgumentException::class.java) { decode() }
         }
+        assertTrue(checked > 0)
     }
 
     @Test

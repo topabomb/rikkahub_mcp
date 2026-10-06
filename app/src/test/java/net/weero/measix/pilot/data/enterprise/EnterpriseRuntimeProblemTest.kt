@@ -12,10 +12,14 @@ class EnterpriseRuntimeProblemTest {
           "status":429,
           "code":"budget_exhausted",
           "detail":"Two limits block this request",
+          "activationId":[],
+          "currentDraftRevision":null,
+          "futureInfo":{"secret":"private-marker"},
           "forwarded":false,
           "requestId":"req_550e8400-e29b-41d4-a716-446655440000",
           "budget":{
             "capability":"MODEL","resourceId":"mdl_3d005a2a-7e91-4abd-a1a4-5c7d4a2e1111","mode":"LIMITED",
+            "futureInfo":{"secret":"private-marker"},
             "blockingLimits":[
               {"period":"DAY","meter":"REQUESTS","limit":10,"used":9,"reserved":1,"resetAt":"2026-09-21T00:00:00Z"},
               {"period":"MONTH","meter":"TOTAL_TOKENS","limit":1000,"used":800,"reserved":200,"resetAt":"2026-10-01T00:00:00Z"}
@@ -30,6 +34,7 @@ class EnterpriseRuntimeProblemTest {
         assertTrue(parsed.message!!.contains("DAY/REQUESTS"))
         assertTrue(parsed.message!!.contains("MONTH/TOTAL_TOKENS"))
         assertTrue(parsed.message!!.contains("requestId=req_"))
+        assertFalse(parsed.message!!.contains("private-marker"))
         assertEquals(parsed.problem, EnterpriseRuntimeProblemException.parseTerminalDetail(parsed.terminalDetail()))
         assertSame(parsed, EnterpriseRuntimeProblemException.find(IllegalStateException("wrapper", parsed)))
         assertEquals(parsed.code, EnterpriseRuntimeProblemException.fromManagedFailure(RoutedHttpException(429, body))?.code)

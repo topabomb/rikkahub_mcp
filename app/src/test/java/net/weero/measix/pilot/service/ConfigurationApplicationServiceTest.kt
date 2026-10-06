@@ -83,9 +83,9 @@ class ConfigurationApplicationServiceTest {
             env.commands.changeAssistantPreference(fixedTarget, AssistantPreferenceChange.InheritModel)
             assertEquals(AssistantModelPreferenceMode.ASSISTANT_DEFAULT,
                 env.queries.observeCurrent().first().conversationConfiguration(fixedTarget).modelPreference!!.mode)
-            if (fixed.mcpServerIds.isNotEmpty()) expectCommandFailure {
+            if (fixed.mcpBindings.map { it.mcpServerId }.isNotEmpty()) expectCommandFailure {
                 env.commands.changeAssistantPreference(fixedTarget,
-                    AssistantPreferenceChange.Mcp(exampleEnterprisePackage().identity.reference(fixed.mcpServerIds.first()), false))
+                    AssistantPreferenceChange.Mcp(exampleEnterprisePackage().identity.reference(fixed.mcpBindings.map { it.mcpServerId }.first()), false))
             }
             assertEquals(JsonInstant.encodeToString(saved), JsonInstant.encodeToString(env.diskDocument()))
         } finally { env.scope.cancel() }

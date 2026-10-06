@@ -21,8 +21,9 @@ if "sha256:" + source_hash != manifest["sourceHash"]:
     raise SystemExit("Core schema differs from its generated export manifest")
 
 
-# Both variants come from the same Core authority. The shared Kotlin DTO retains
-# explicit version-dependent required-field validation, without a second schema overlay.
+# Retain independent v4 wire types. PlatformWireCodec validates the v4 projection before
+# projecting its legacy MCP bindings into the current runtime representation.
+# The projected snapshot retains version 4 and has no starter opening.
 base_versions = SCHEMAS["ManagedSnapshotV4"]["properties"]["schemaVersion"]["enum"]
 target_versions = SCHEMAS["ManagedSnapshot"]["properties"]["schemaVersion"]["enum"]
 SCHEMAS["ManagedSnapshot"]["properties"]["schemaVersion"]["enum"] = base_versions + target_versions
@@ -32,6 +33,14 @@ ROOTS = ["ManagedSnapshotV4", "Discovery", "EnrollmentExchangeRequest", "Enrollm
          "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
          "Problem", "EnterpriseUpdateFeed", "WorkspaceProjection",
          "WorkspaceFileList", "WorkspaceFileMutation", "WorkspaceFileResult"]
+# These producer-only fields have no Android display, storage or execution consumer.
+# Keep them in the pinned Core contract, but outside the Android response projection.
+OMITTED_RESPONSE_FIELDS = {
+    "ManagedSnapshotV4": {"metadata"},
+    "ManagedSnapshot": {"metadata"},
+    "AssistantStarterDefinitionV4": {"description"},
+    "Problem": {"activationId", "currentDraftRevision"},
+}
 definitions = {}
 
 
@@ -63,6 +72,8 @@ def kotlin_type(schema, name):
             sensitive = any(k in properties for k in ["accessToken", "refreshToken", "ticket"]) or name == "EnrollmentExchangeRequest"
             fields, validations = [], []
             for key, value in properties.items():
+                if key in OMITTED_RESPONSE_FIELDS.get(name, set()):
+                    continue
                 field_type = kotlin_type(value, name + key[0].upper() + key[1:])
                 optional = key not in required
                 fields.append(f'    val {key}: {field_type}' + ("? = null," if optional else ","))

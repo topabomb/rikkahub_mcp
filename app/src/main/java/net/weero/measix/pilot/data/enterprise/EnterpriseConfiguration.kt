@@ -123,6 +123,8 @@ internal data class EnterpriseMcpResource(
     val name: String,
     val enabled: Boolean = true,
     val authOwnership: PlatformMcpDefinitionAuthOwnership? = null,
+    val toolAccessMode: PlatformMcpDefinitionToolAccessMode,
+    val allowedTools: List<PlatformMcpToolGrant>,
 )
 
 /** Only enterprise-owned fields belong here; local usage choices are user preferences. */
@@ -133,7 +135,7 @@ internal data class EnterpriseAssistant(
     val description: String,
     val modelId: String,
     val systemPrompt: String,
-    val mcpServerIds: List<String>,
+    val mcpBindings: List<PlatformAssistantMcpBinding>,
     val memorySeedIds: List<String>,
     val enabled: Boolean = true,
     val allowAsSubAssistant: Boolean = false,

@@ -96,13 +96,13 @@ internal fun resolveEnterpriseAssistantUsage(
         description = definition.description,
         chatModelId = identity.reference(definition.modelId),
         systemPrompt = definition.systemPrompt,
-        mcpServers = definition.mcpServerIds.mapTo(linkedSetOf(), identity::reference),
+        mcpServers = definition.mcpBindings.map { it.mcpServerId }.mapTo(linkedSetOf(), identity::reference),
         allowAsSubAssistant = definition.allowAsSubAssistant,
         allowedSubAssistantIds = definition.allowedSubAssistantIds.mapTo(linkedSetOf(), identity::reference),
     )
     return applyAssistantUsage(fixed, usage).let { resolved ->
         resolved.copy(
-            mcpServers = fixed.mcpServers + resolved.mcpServers,
+            mcpServers = fixed.mcpServers + resolved.mcpServers.filterIsInstance<ConfigurationReference.User>(),
             allowConversationSystemPrompt = false,
         )
     }

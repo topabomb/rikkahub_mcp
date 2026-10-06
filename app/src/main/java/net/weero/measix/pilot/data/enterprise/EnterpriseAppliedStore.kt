@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
@@ -26,7 +27,7 @@ internal enum class EnterpriseExitReason {
     USER_REQUEST, AUTHORIZATION_EXPIRED, AUTHORIZATION_REVOKED, IDENTITY_DELETED, LOCAL_DATA_RESET,
 }
 
-internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 6
+internal const val ENTERPRISE_MANIFEST_SCHEMA_VERSION = 7
 
 @Serializable
 internal data class EnterpriseSession(
@@ -315,13 +316,19 @@ internal class EnterpriseAppliedStore(
         }
     }
 
-    private fun readCandidate(manifest: EnterpriseManifest, version: EnterpriseAppliedVersion): EnterpriseCandidate {
+    private fun readCandidate(
+        manifest: EnterpriseManifest,
+        version: EnterpriseAppliedVersion,
+        migrateMcp: Boolean = false,
+    ): EnterpriseCandidate {
         val directory = revisionDirectory(version.revision)
         val configurationBytes = readBounded(File(directory, "configuration.json"))
         if (hash(configurationBytes) != version.configurationHash) {
             throw EnterpriseStorageException("enterprise_revision_hash_mismatch")
         }
-        val public = decode<StoredEnterpriseConfiguration>(configurationBytes)
+        val public = decode<StoredEnterpriseConfiguration>(
+            if (migrateMcp) migrateStoredMcp(configurationBytes) else configurationBytes,
+        )
         if (public.revision != version.revision || public.configuration.generation != version.generation) {
             throw EnterpriseStorageException("enterprise_revision_identity_mismatch")
         }
@@ -434,9 +441,49 @@ internal class EnterpriseAppliedStore(
         }
         return when (schemaVersion) {
             ENTERPRISE_MANIFEST_SCHEMA_VERSION -> decode(bytes)
+            6 -> migrateManifestV6(bytes)
             5 -> migrateManifestV5(encoded)
             else -> throw EnterpriseStorageException("unsupported_enterprise_manifest")
         }
+    }
+
+    /** Stage a new immutable revision before publishing the new local format. Release facts stay unchanged. */
+    private fun migrateManifestV6(bytes: ByteArray): EnterpriseManifest {
+        val original = decode<EnterpriseManifest>(bytes)
+        val current = original.copy(schemaVersion = ENTERPRISE_MANIFEST_SCHEMA_VERSION)
+        val version = original.applied ?: return commit(current).manifest
+        val candidate = readConfigurationValue { readCandidate(current, version, migrateMcp = true) }
+            .getOrNull()
+        // A damaged Applied body must retain identity and repair facts, just as normal recovery does.
+        return if (candidate == null) commit(current, retainedApplied = version).manifest
+        else commit(current.copy(applied = prepare(candidate))).manifest
+    }
+
+    /** Only old local formats enter this conversion; network v5 and normal reads stay strict. */
+    private fun migrateStoredMcp(bytes: ByteArray): ByteArray {
+        val envelope = json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
+        val configuration = requireNotNull(envelope["configuration"] as? JsonObject) { "invalid_legacy_enterprise_configuration" }
+        val servers = requireNotNull(configuration["mcpServers"] as? JsonArray) { "invalid_legacy_enterprise_mcp_servers" }
+        val assistants = requireNotNull(configuration["assistants"] as? JsonArray) { "invalid_legacy_enterprise_assistants" }
+        val migrated = JsonObject(configuration + mapOf(
+            "mcpServers" to JsonArray(servers.map { value ->
+                val server = value.jsonObject
+                if ("toolAccessMode" in server) server else JsonObject(server + mapOf(
+                    "toolAccessMode" to JsonPrimitive("ALL"), "allowedTools" to JsonArray(emptyList()),
+                ))
+            }),
+            "assistants" to JsonArray(assistants.map { value ->
+                val assistant = value.jsonObject
+                if ("mcpBindings" in assistant) assistant else {
+                    val ids = requireNotNull(assistant["mcpServerIds"] as? JsonArray) { "invalid_legacy_enterprise_mcp_bindings" }
+                    JsonObject((assistant - "mcpServerIds") + ("mcpBindings" to JsonArray(ids.distinct().map { id ->
+                        JsonObject(mapOf("mcpServerId" to id, "toolSelection" to JsonPrimitive("ALL"),
+                            "toolNames" to JsonArray(emptyList())))
+                    })))
+                }
+            }),
+        ))
+        return JsonObject(envelope + ("configuration" to migrated)).toString().toByteArray(Charsets.UTF_8)
     }
 
     /** One durable conversion removes URL-qualified identity from the last development manifest. */
@@ -469,7 +516,7 @@ internal class EnterpriseAppliedStore(
             val value = bytes.toString(Charsets.UTF_8)
             return (LegacyEnterprisePrincipalEncoding.migrateStorageJson(value) ?: value).toByteArray()
         }
-        val configuration = decode<LegacyStoredEnterpriseConfiguration>(migrate(configurationBytes))
+        val configuration = decode<LegacyStoredEnterpriseConfiguration>(migrateStoredMcp(migrate(configurationBytes)))
         val execution = decode<LegacyStoredEnterpriseExecution>(migrate(executionBytes))
         if (configuration.revision != version.revision || execution.revision != version.revision ||
             configuration.identity != manifest.session?.identity || configuration.configuration.generation != version.generation) {

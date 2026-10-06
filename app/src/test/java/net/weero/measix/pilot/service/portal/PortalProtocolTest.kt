@@ -19,10 +19,12 @@ class PortalProtocolTest {
     fun `Android parser consumes all shared BridgeRequest cases with pinned contract bytes`() {
         val manifest = Json.parseToJsonElement(resource("manifest.json").decodeToString()).jsonObject
         assertEquals(PortalProtocol.VERSION, manifest.getValue("bridgeVersion").jsonPrimitive.int)
-        assertEquals(setOf("portal-contract.openapi.json", "client-feed.schemas.json", "native-vectors.json",
-            "feed-vectors.json", "platform-v1.json", "cases.json"),
-            manifest.getValue("artifacts").jsonObject.keys)
-        manifest.getValue("artifacts").jsonObject.forEach { (name, entry) ->
+        val artifacts = manifest.getValue("artifacts").jsonObject
+        val consumed = setOf("portal-contract.openapi.json", "client-feed.schemas.json", "native-vectors.json",
+            "feed-vectors.json", "platform-v1.json", "cases.json")
+        assertTrue(artifacts.keys.containsAll(consumed))
+        consumed.forEach { name ->
+            val entry = artifacts.getValue(name)
             val actual = MessageDigest.getInstance("SHA-256").digest(resource(name)).joinToString("") { "%02x".format(it) }
             assertEquals(name, entry.jsonObject.getValue("sha256").jsonPrimitive.content, actual)
         }

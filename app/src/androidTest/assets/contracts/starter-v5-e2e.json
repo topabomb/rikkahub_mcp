@@ -66,7 +66,7 @@
         "description": "共享 v4 接入资料",
         "displayName": "Starter V5 Mock",
         "enabled": true,
-        "mcpServerIds": [],
+        "mcpBindings": [],
         "memorySeed": [],
         "modelId": "mdl_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "systemPrompt": "ASSISTANT_FALLBACK_MUST_NOT_WIN"
@@ -146,13 +146,13 @@
       }
     ],
     "tts": [],
-    "snapshotHash": "sha256:57249edcd06948882745689f74686bf9b19b0f09138b73907a100d81ab962f4f"
+    "snapshotHash": "sha256:2fa83731ecbec6ecfc1a7a6a6fb48c78dd3ebb513cd453e5c07066c9ee510e89"
   },
   "provenance": {
     "owner": "Android instrumentation mock only",
     "publishedByCore": false,
     "baseFixture": "app/src/test/resources/contracts/platform/cases.json",
-    "baseFixtureSha256": "fb8d5e70a6d39886bb9c445860a44e24faa5abca363404d3f5ffe9b30a58c053",
+    "baseFixtureSha256": "efc58aa29c43b13fa48ef8851d6dc7643fad5137fbe564271e71aacc4d9f1839",
     "targetContract": "app/src/test/resources/contracts/platform/client-control.openapi.yaml",
     "purpose": "Dedicated unbound AVD Starter first-send end-to-end"
   }

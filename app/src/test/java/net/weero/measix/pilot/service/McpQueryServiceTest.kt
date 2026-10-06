@@ -17,9 +17,58 @@ import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import org.junit.Assert.assertEquals
+import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.ai.mcp.*
+import net.weero.measix.pilot.data.configuration.ConfigurationResolver
+import net.weero.measix.pilot.data.configuration.appliedConfiguration
+import net.weero.measix.pilot.data.datastore.UserSettingsDocument
+import net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot
+import me.rerere.common.configuration.ConfigurationReference
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class McpQueryServiceTest {
+    @Test fun `managed query and assistant picker show only effective reviewed subset and retain missing reasons`() {
+        val original = exampleEnterprisePackage()
+        val first = original.configuration.mcpServers.first()
+        val read = McpCatalogTool("read", inputSchema = buildJsonObject { put("type", "object") })
+        val changed = McpCatalogTool("changed", inputSchema = read.inputSchema)
+        val grant = PlatformMcpToolGrant("read", read.contractHash(), PlatformMcpToolGrantApprovalPolicy.AUTO)
+        val resource = first.copy(toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
+            allowedTools = listOf(grant, grant.copy(name = "changed", approvalPolicy = PlatformMcpToolGrantApprovalPolicy.REQUIRE_CONFIRMATION)))
+        val definition = original.configuration.assistants.first()
+        val binding = PlatformAssistantMcpBinding(resource.id, PlatformAssistantMcpBindingToolSelection.ALLOWLIST, listOf("read"))
+        val packet = original.copy(configuration = original.configuration.copy(
+            mcpServers = original.configuration.mcpServers.map { if (it.id == first.id) resource else it },
+            assistants = original.configuration.assistants.map { if (it.id == definition.id) it.copy(mcpBindings = listOf(binding)) else it }))
+        val document = UserSettingsDocument.empty()
+        val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+        val access = RealmAccess.Enterprise(packet.identity.scope, "query")
+        val id = packet.identity.reference(resource.id)
+        val snapshot = ExecutionConfigurationSnapshot(document.personalSettings(), resolved, "user")
+        val catalog = McpCatalogSnapshot(access.scope, id, 1, "definition", "catalog", listOf(read, changed,
+            McpCatalogTool("unapproved", inputSchema = read.inputSchema)), McpManagedCatalog(packet.configuration.generation))
+        val capability = McpRuntimeCapability(McpStatus.Ready(3, 1), catalog, true)
+        val row = snapshot.mcpPresentations(access, mapOf(id to capability)).single { it.serverId == id }
+        assertEquals(listOf("read", "changed"), row.tools.map { it.name })
+        assertEquals(1, row.tools.count { it.enabled })
+        assertEquals(McpToolUnavailableReason.CONTRACT_CHANGED, row.tools.last().unavailableReason)
+        assertTrue(row.tools.last().needsApproval)
+        assertEquals(false, row.allowsAllTools)
+        val target = ConversationAssistantTarget(ConversationCommandTarget(kotlin.uuid.Uuid.random(), RealmSelection(access, 1)) {},
+            packet.identity.reference(definition.id))
+        val choice = resolved.conversationConfiguration(target).mcpChoices(listOf(row)).single { it.serverId == id }
+        assertEquals(listOf("read"), choice.tools.map { it.name })
+        assertFalse(choice.canToggle)
+        assertEquals(false, choice.selectsAllTools)
+        val noDirectory = snapshot.mcpPresentations(access, emptyMap()).single { it.serverId == id }
+        assertEquals(McpToolUnavailableReason.DIRECTORY_UNAVAILABLE, noDirectory.tools.first().unavailableReason)
+        val missing = snapshot.mcpPresentations(access, mapOf(id to capability.copy(catalog = catalog.copy(tools = emptyList()))))
+            .single { it.serverId == id }
+        assertTrue(missing.directoryConfirmed)
+        assertTrue(missing.tools.all { !it.enabled && it.unavailableReason == McpToolUnavailableReason.MISSING })
+    }
+
     @Test
     fun `catalog identity mismatch is an error rather than fabricated discovery`() {
         val server = McpServerConfig.StreamableHTTPServer(

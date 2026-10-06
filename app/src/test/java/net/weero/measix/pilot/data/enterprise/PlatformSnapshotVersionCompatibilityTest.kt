@@ -30,7 +30,7 @@ class PlatformSnapshotVersionCompatibilityTest {
     }
 
     @Test
-    fun `snapshot version rejects missing v5 opening and extra v4 opening without inventing defaults`() {
+    fun `snapshot version rejects missing current bindings and opening without inventing defaults`() {
         val v4 = Json.parseToJsonElement(fixture("v4-full")).jsonObject
         val v5 = Json.parseToJsonElement(withStarterOpeningMock(v4.toString())).jsonObject
         listOf(
@@ -80,18 +80,44 @@ class PlatformSnapshotVersionCompatibilityTest {
     }
 
     @Test
-    fun `supported snapshot versions still reject unknown fields and malformed known fields`() {
+    fun `supported snapshots ignore response extensions but validate consumed fields with safe paths`() {
+        fun extend(value: JsonElement): JsonElement = when (value) {
+            is JsonObject -> JsonObject(value.mapValues { extend(it.value) } +
+                ("futureField" to JsonObject(mapOf("enabled" to JsonPrimitive(true), "secret" to JsonPrimitive("private-marker")))))
+            is JsonArray -> JsonArray(value.map(::extend))
+            else -> value
+        }
         for (raw in listOf(fixture("v4-full"), withStarterOpeningMock(fixture("v4-full")))) {
             val original = Json.parseToJsonElement(raw).jsonObject
-            for (invalid in listOf(
-                JsonObject(original + ("futureField" to JsonPrimitive(true))),
-                JsonObject(original + ("managedGeneration" to JsonPrimitive("1"))),
-                JsonObject(original + ("assistants" to JsonNull)),
+            val expected = PlatformWireCodec.decode<PlatformManagedSnapshot>(raw)
+            assertEquals(expected, PlatformWireCodec.decode<PlatformManagedSnapshot>(extend(original).toString()))
+            val ignored = JsonObject(original + ("metadata" to JsonNull) +
+                ("starters" to JsonArray(original.getValue("starters").jsonArray.map { starter ->
+                    JsonObject(starter.jsonObject + ("description" to JsonPrimitive(123)))
+                })))
+            assertEquals(expected, PlatformWireCodec.decode<PlatformManagedSnapshot>(ignored.toString()))
+            if (expected.schemaVersion == 4L) {
+                val v5Fields = JsonObject(original +
+                    ("mcp" to JsonArray(original.getValue("mcp").jsonArray.map {
+                        JsonObject(it.jsonObject + ("toolAccessMode" to JsonNull) + ("allowedTools" to JsonPrimitive(false)))
+                    })) + ("assistants" to JsonArray(original.getValue("assistants").jsonArray.map {
+                        JsonObject(it.jsonObject + ("mcpBindings" to JsonNull))
+                    })) + ("starters" to JsonArray(original.getValue("starters").jsonArray.map {
+                        JsonObject(it.jsonObject + ("openingSnapshot" to JsonPrimitive(false)))
+                    })))
+                assertEquals(expected, PlatformWireCodec.decode<PlatformManagedSnapshot>(v5Fields.toString()))
+            }
+            for ((invalid, path) in listOf(
+                JsonObject(original + ("managedGeneration" to JsonPrimitive("private-marker"))) to "$.managedGeneration",
+                JsonObject(original + ("assistants" to JsonNull)) to "$.assistants",
+                JsonObject(original - "assistants") to "$.assistants",
             )) {
                 val failure = assertThrows(EnterpriseConfigurationException::class.java) {
                     PlatformWireCodec.decode<PlatformManagedSnapshot>(invalid.toString())
                 }
                 assertFalse(failure is EnterpriseSnapshotCompatibilityException)
+                assertTrue(failure.message.orEmpty().contains(path))
+                assertFalse(failure.message.orEmpty().contains("private-marker"))
             }
         }
     }

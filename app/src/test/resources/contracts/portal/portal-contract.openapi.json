@@ -25,7 +25,6 @@
       },
       "HostStatus": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "managedReady",
           "appliedManagedGeneration",
@@ -53,14 +52,15 @@
             "type": "array",
             "uniqueItems": true,
             "items": {
-              "$ref": "#/components/schemas/BridgeMethod"
+              "type": "string",
+              "minLength": 1,
+              "description": "Capability advertisement; ignore unknown methods and invoke only locally supported BridgeMethod values."
             }
           }
         }
       },
       "MediaHandle": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "mediaId",
           "mimeType",
@@ -88,7 +88,6 @@
       },
       "MediaChunk": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "dataBase64",
           "nextOffset",
@@ -112,7 +111,6 @@
       },
       "BridgeError": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "code",
           "message"
@@ -120,23 +118,8 @@
         "properties": {
           "code": {
             "type": "string",
-            "enum": [
-              "invalid_request",
-              "unsupported_version",
-              "unsupported_method",
-              "permission_denied",
-              "user_cancelled",
-              "session_expired",
-              "media_unavailable",
-              "resource_limit",
-              "timeout",
-              "network_unavailable",
-              "configuration_invalid",
-              "configuration_not_ready",
-              "source_forbidden",
-              "source_unavailable",
-              "enterprise_update_not_found"
-            ]
+            "minLength": 1,
+            "description": "Unknown codes remain operation failures with a neutral fallback; never infer session revocation from an unknown code."
           },
           "message": {
             "type": "string",
@@ -146,7 +129,6 @@
       },
       "EmptyResult": {
         "type": "object",
-        "additionalProperties": false,
         "required": [],
         "properties": {}
       },
@@ -650,7 +632,6 @@
         "oneOf": [
           {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "bridgeVersion",
               "requestId",
@@ -670,7 +651,7 @@
                 "maxLength": 128
               },
               "result": {
-                "oneOf": [
+                "anyOf": [
                   {
                     "$ref": "#/components/schemas/HostStatus"
                   },
@@ -683,18 +664,23 @@
                   {
                     "$ref": "#/components/schemas/EmptyResult"
                   }
-                ]
+                ],
+                "description": "Extensible result object; the consumer must validate the result schema for the captured request method."
               },
               "documentId": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 128
               }
+            },
+            "not": {
+              "required": [
+                "error"
+              ]
             }
           },
           {
             "type": "object",
-            "additionalProperties": false,
             "required": [
               "bridgeVersion",
               "requestId",
@@ -721,13 +707,17 @@
                 "minLength": 1,
                 "maxLength": 128
               }
+            },
+            "not": {
+              "required": [
+                "result"
+              ]
             }
           }
         ]
       },
       "PortalDocument": {
         "type": "object",
-        "additionalProperties": false,
         "required": [
           "bridgeVersion",
           "documentId"

@@ -68,12 +68,31 @@ internal object EnterpriseConfigurationCodec {
         (config.mcpServers.map { it.name } + config.gateways.map { it.name }).forEach {
             check(it.isNotBlank(), "invalid_enterprise_tool_resource")
         }
+        config.mcpServers.forEach { server ->
+            check(when (server.toolAccessMode) {
+                PlatformMcpDefinitionToolAccessMode.ALL -> server.allowedTools.isEmpty()
+                PlatformMcpDefinitionToolAccessMode.ALLOWLIST -> server.allowedTools.isNotEmpty()
+            }, "invalid_mcp_tool_access_mode")
+            check(server.allowedTools.map { it.name }.distinct().size == server.allowedTools.size,
+                "duplicate_mcp_tool_grant")
+        }
         config.assistants.forEach { assistant ->
             check(assistant.name.isNotBlank(), "invalid_enterprise_assistant")
             val model = models[assistant.modelId]
             check(model != null && model.type == ModelType.CHAT && (!assistant.enabled || model.enabled), "invalid_assistant_model_reference")
-            check(assistant.mcpServerIds.distinct().size == assistant.mcpServerIds.size &&
-                assistant.mcpServerIds.all { mcp[it]?.let { server -> !assistant.enabled || server.enabled } == true }, "invalid_assistant_mcp_reference")
+            check(assistant.mcpBindings.map { it.mcpServerId }.distinct().size == assistant.mcpBindings.size &&
+                assistant.mcpBindings.all { mcp[it.mcpServerId]?.let { server -> !assistant.enabled || server.enabled } == true },
+                "invalid_assistant_mcp_reference")
+            assistant.mcpBindings.forEach { binding ->
+                check(when (binding.toolSelection) {
+                    PlatformAssistantMcpBindingToolSelection.ALL -> binding.toolNames.isEmpty()
+                    PlatformAssistantMcpBindingToolSelection.ALLOWLIST -> binding.toolNames.isNotEmpty()
+                }, "invalid_assistant_mcp_tool_selection")
+                val server = mcp.getValue(binding.mcpServerId)
+                check(server.toolAccessMode == PlatformMcpDefinitionToolAccessMode.ALL ||
+                    binding.toolNames.all { name -> server.allowedTools.any { it.name == name } },
+                    "assistant_mcp_tool_exceeds_server_grant")
+            }
             check(assistant.memorySeedIds.distinct().size == assistant.memorySeedIds.size &&
                 assistant.memorySeedIds.all { it in seeds }, "invalid_assistant_seed_reference")
             check(assistant.allowedSubAssistantIds.distinct().size == assistant.allowedSubAssistantIds.size &&

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "full-contract",
+    "rawDefinition": "{\"name\":\"read\",\"inputSchema\":{\"type\":\"object\"},\"description\":\"读取\"}",
+    "canonical": "{\"description\":\"读取\",\"inputSchema\":{\"type\":\"object\"},\"name\":\"read\"}",
+    "contractHash": "sha256:449878f65ad1022c7d722faebed977f8b1580fd3d7b0c2a4b2edf84bd6714de5"
+  },
+  {
+    "name": "property-order-only",
+    "rawDefinition": "{\"inputSchema\":{\"type\":\"object\"},\"description\":\"读取\",\"name\":\"read\"}",
+    "canonical": "{\"description\":\"读取\",\"inputSchema\":{\"type\":\"object\"},\"name\":\"read\"}",
+    "contractHash": "sha256:449878f65ad1022c7d722faebed977f8b1580fd3d7b0c2a4b2edf84bd6714de5"
+  },
+  {
+    "name": "description-drift",
+    "rawDefinition": "{\"name\":\"read\",\"inputSchema\":{\"type\":\"object\"},\"description\":\"写入\"}",
+    "canonical": "{\"description\":\"写入\",\"inputSchema\":{\"type\":\"object\"},\"name\":\"read\"}",
+    "contractHash": "sha256:e38c04d1d405a2416fde2a289c2603fc02b9afd3e089c529ea2767730f049f46"
+  },
+  {
+    "name": "unicode-and-ecmascript-numbers",
+    "rawDefinition": "{\"name\":\"read\",\"inputSchema\":{\"type\":\"object\"},\"_meta\":{\"\":2,\"😀\":1},\"numbers\":[1.0,-0.0,1e-7,1e-6,1e21]}",
+    "canonical": "{\"_meta\":{\"😀\":1,\"\":2},\"inputSchema\":{\"type\":\"object\"},\"name\":\"read\",\"numbers\":[1,0,1e-7,0.000001,1e+21]}",
+    "contractHash": "sha256:4bf07a8895b519f01f2fc922f8bdbe6df338c20005204c81193eccce118c8a3e"
+  }
+]

@@ -25,7 +25,7 @@ class EnterpriseStarterAppliedStoreTest {
         val execution = candidate.execution as EnterpriseExecution.Platform
         val session = EnterpriseSession(sessionId, candidate.identity, 2000000000000L,
             PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
-        return EnterpriseManifest(6, EnterpriseSessionPhase.READY, session, version,
+        return EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, version,
             candidate.identity.scope, candidate.identity).also(store::commit)
     }
 
@@ -74,7 +74,7 @@ class EnterpriseStarterAppliedStoreTest {
     }
 
     @Test
-    fun `historical manifest six reopens discovery four and absent opening without rewriting bytes or hashes`() {
+    fun `historical manifest six migrates absent opening and unknown schema while preserving original files`() {
         val source = exampleEnterprisePackage().toCandidate()
         val execution = source.execution as EnterpriseExecution.Platform
         val oldConnection = execution.connection.copy(discovery = execution.connection.discovery.copy(
@@ -90,30 +90,49 @@ class EnterpriseStarterAppliedStoreTest {
         val file = File(folder, "revisions/${version.revision}/configuration.json")
         val payload = json.parseToJsonElement(file.readText()).jsonObject
         val config = payload.getValue("configuration").jsonObject
-        val oldConfig = JsonObject(config + ("starters" to JsonArray(config.getValue("starters").jsonArray.map {
-            JsonObject(it.jsonObject - "openingSnapshot")
-        })))
+        val oldConfig = JsonObject(config + mapOf(
+            "starters" to JsonArray(config.getValue("starters").jsonArray.map {
+                JsonObject(it.jsonObject - "openingSnapshot")
+            }),
+            "mcpServers" to JsonArray(config.getValue("mcpServers").jsonArray.map {
+                JsonObject(it.jsonObject - "toolAccessMode" - "allowedTools")
+            }),
+            "assistants" to JsonArray(config.getValue("assistants").jsonArray.map {
+                JsonObject((it.jsonObject - "mcpBindings") + ("mcpServerIds" to JsonArray(
+                    it.jsonObject.getValue("mcpBindings").jsonArray.map { binding ->
+                        binding.jsonObject.getValue("mcpServerId")
+                    },
+                )))
+            }),
+        ))
         val oldBytes = JsonObject(payload + ("configuration" to oldConfig)).toString().toByteArray()
         file.writeBytes(oldBytes)
         val executionFile = File(folder, "revisions/${version.revision}/execution.json")
         val oldExecutionBytes = JsonObject(json.parseToJsonElement(executionFile.readText()).jsonObject - "snapshotSchemaVersion")
             .toString().toByteArray()
         executionFile.writeBytes(oldExecutionBytes)
-        val oldManifest = manifest.copy(applied = version.copy(configurationHash = hash(oldBytes), executionHash = hash(oldExecutionBytes)))
+        val oldManifest = manifest.copy(schemaVersion = 6,
+            applied = version.copy(configurationHash = hash(oldBytes), executionHash = hash(oldExecutionBytes)))
         val manifestBytes = json.encodeToString(EnterpriseManifest.serializer(), oldManifest).toByteArray()
         File(folder, "manifest.json").writeBytes(manifestBytes)
 
         val reopened = enterpriseTestStore(folder)
         val loaded = reopened.load()
-        assertEquals(oldManifest, loaded.manifest)
+        assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, loaded.manifest.schemaVersion)
+        assertEquals(oldManifest.session, loaded.manifest.session)
+        assertEquals(oldManifest.selectedScope, loaded.manifest.selectedScope)
+        assertNotEquals(version.revision, loaded.manifest.applied!!.revision)
         assertEquals(candidate.configuration, loaded.configuration)
         assertEquals(listOf(4L), loaded.manifest.session!!.platform!!.connection.discovery.supportedSnapshotSchemaVersions)
         assertTrue(requireNotNull(loaded.configuration).starters.all { it.openingSnapshot == null })
-        assertEquals(candidate.execution, reopened.execution(oldManifest))
-        assertNull((reopened.execution(oldManifest) as EnterpriseExecution.Platform).snapshotSchemaVersion)
+        assertEquals(candidate.execution, reopened.execution(loaded.manifest))
+        assertNull((reopened.execution(loaded.manifest) as EnterpriseExecution.Platform).snapshotSchemaVersion)
         assertArrayEquals(oldBytes, file.readBytes())
         assertArrayEquals(oldExecutionBytes, executionFile.readBytes())
-        assertArrayEquals(manifestBytes, File(folder, "manifest.json").readBytes())
+        val migratedManifestBytes = File(folder, "manifest.json").readBytes()
+        assertFalse(manifestBytes.contentEquals(migratedManifestBytes))
+        assertEquals(loaded.manifest, enterpriseTestStore(folder).load().manifest)
+        assertArrayEquals(migratedManifestBytes, File(folder, "manifest.json").readBytes())
     }
 
     @Test

@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.tools
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.enterprise.reference
 
 
 import io.mockk.every
@@ -84,6 +85,56 @@ class TurnToolSetFactoryTest {
             assertTrue(requests.isEmpty())
             assertEquals(personal.id, settings.selectedSearchServiceId)
         } finally { server.stop(0) }
+    }
+
+    @Test fun `managed AUTO and ALL use existing execution while explicit approval resumes the same call and reaches MCP`() = runTest {
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(packet.identity.scope, "session")
+        val resolved = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val local = mockk<LocalTools>()
+        every { local.getTools(any(), any(), any()) } returns emptyList()
+        val manager = mockk<McpRuntimeCoordinator>()
+        val approvals = mutableListOf<Pair<String?, Boolean>>()
+        io.mockk.coEvery { manager.callTool(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            approvals += arg<String?>(7) to arg<Boolean>(8)
+            listOf(me.rerere.ai.ui.UIMessagePart.Text("success"))
+        }
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk())
+        for (hash in listOf(null, "sha256:" + "a".repeat(64))) {
+            for (needsApproval in listOf(false, true)) {
+                val capability = availableTool(packet.identity.reference(packet.configuration.mcpServers.first().id), "read",
+                    buildJsonObject { put("type", "object") }).copy(needsApproval = needsApproval, contractHash = hash)
+                val definition = factory.buildTools(access, Assistant(), settings = Settings(), configuration = resolved,
+                    capabilityModel = null, mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(capability)))
+                    .single { it.name == "mcp__server__read" }
+                val runtime = ToolCallRuntime(Json)
+                val source = me.rerere.ai.ui.UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(),
+                    stepId = kotlin.uuid.Uuid.random(), providerCallId = "call", toolName = definition.name, input = "{}")
+                val messageId = kotlin.uuid.Uuid.random()
+                val index = freezeToolSet(listOf(definition)).bindingsByName
+                fun prepare(tool: me.rerere.ai.ui.UIMessagePart.Tool, availability: TurnInteractionCapability) =
+                    runtime.prepareBatch(messageId, listOf(LocatedToolCall(0, tool)), index, availability)
+                val first = prepare(source, TurnInteractionCapability.FULL)
+                val prepared = if (needsApproval) {
+                    assertEquals(1, first.pending.size)
+                    val pending = first.replacements.getValue(source.localCallId)
+                    val resumed = prepare(pending.copy(interactionState = me.rerere.ai.ui.ToolInteractionState.Approved), TurnInteractionCapability.FULL)
+                    (resumed.resolvedCalls.single() as ResolvedToolCall.Executable).call.also {
+                        assertEquals(first.pending.single().locator, it.locator)
+                    }
+                } else (first.resolvedCalls.single() as ResolvedToolCall.Executable).call
+                val outcome = runtime.execute(prepared, ToolExecutionHooks({ me.rerere.ai.core.ToolAttachmentResolution() }, { _, _ -> }, {}, {}))
+                assertEquals(me.rerere.ai.ui.ToolResultStatus.COMPLETED, outcome.resultStatus)
+                assertEquals(hash to needsApproval, approvals.last())
+                val child = prepare(source, TurnInteractionCapability.USER_INPUT_ONLY)
+                if (needsApproval) {
+                    assertTrue(child.pending.isEmpty())
+                    assertEquals(1, child.immediateResults.size)
+                } else assertTrue(child.resolvedCalls.single() is ResolvedToolCall.Executable)
+            }
+        }
     }
 
     @Test

@@ -184,10 +184,12 @@ class EnterprisePageAndroidTest {
                     else -> EnterpriseUpdateSeverity.INFO
                 }) }))
         fixture.show()
-        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).assertIsDisplayed()
-        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_announcement))[0].assertIsDisplayed()
-        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_maintenance))[0].assertIsDisplayed()
-        compose.onAllNodesWithText(text(R.string.enterprise_update_important))[0].assertIsDisplayed()
+        capturePage("enterprise-content-home.png")
+        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_announcement))[0].performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(text(R.string.enterprise_update_maintenance))[0].performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.enterprise_update_important))[0].performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(titles.first()).performScrollTo()
         val preview = compose.onAllNodesWithText("巡检通知", substring = true, useUnmergedTree = true)[0]
         val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
         assertTrue(preview.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult]
@@ -195,7 +197,6 @@ class EnterprisePageAndroidTest {
         assertEquals(3, layouts.single().lineCount)
         assertTrue(layouts.single().hasVisualOverflow)
         assertFalse(layouts.single().layoutInput.text.text.contains("**"))
-        capturePage("enterprise-content-home.png")
         compose.onNodeWithText(titles.first()).performClick()
         compose.waitForIdle()
         layouts.clear()
@@ -210,7 +211,7 @@ class EnterprisePageAndroidTest {
         compose.onNode(hasScrollAction()).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) {
             it(0f, -10_000f)
         }
-        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_recent_updates_count, 5)).performScrollTo().assertIsDisplayed()
         capturePage("enterprise-personal-updates.png")
         coVerify { fixture.service.recentUpdates(match { it.access == RealmAccess.Personal }, any()) }
         fixture.state.value = overview(access = null, revision = 3)

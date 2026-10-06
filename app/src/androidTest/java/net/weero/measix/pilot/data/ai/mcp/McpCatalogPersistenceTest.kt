@@ -26,6 +26,30 @@ import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
 class McpCatalogPersistenceTest {
+    @Test fun confirmedEmptyDirectDirectoryReplacesToolsAndSurvivesDataStoreReopening() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.noBackupFilesDir, "mcp-empty-test-${Uuid.random()}").apply { check(mkdirs()) }
+        val authority = EnterpriseAuthority("deployment")
+        val scope = ConfigurationScope.Enterprise(authority, "user")
+        val id = ConfigurationReference.Enterprise(authority, "mcp_empty")
+        val populated = McpCatalogCandidate(scope, id, "definition", listOf(
+            McpCatalogTool("read", inputSchema = buildJsonObject { put("type", "object") })), McpManagedCatalog(1))
+        var empty: McpCatalogSnapshot? = null
+        try {
+            withStore(context, root) { store ->
+                store.commitCandidate(populated)
+                empty = (store.commitCandidate(populated.copy(tools = emptyList())) as McpCatalogCommitResult.Committed).snapshot
+            }
+            withStore(context, root) { store ->
+                assertEquals(empty, store.catalogs.value.getValue(populated.key))
+                assertTrue(store.catalogs.value.getValue(populated.key).tools.isEmpty())
+                assertTrue(store.commitCandidate(populated.copy(tools = emptyList())) is McpCatalogCommitResult.Unchanged)
+                val personal = McpCatalogCandidate(ConfigurationScope.Personal, ConfigurationReference.random(), "personal", emptyList())
+                assertTrue(store.commitCandidate(personal) is McpCatalogCommitResult.RejectedEmpty)
+            }
+        } finally { check(root.deleteRecursively()) }
+    }
+
     @Test
     fun restoredAndDiscoveredCatalogsRemainIdenticalToDiskAcrossOwnersReopening() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()

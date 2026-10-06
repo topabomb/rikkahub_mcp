@@ -10,7 +10,11 @@ internal fun withStarterOpeningMock(raw: String): String {
         return JsonObject(root + ("supportedSnapshotSchemaVersions" to JsonArray(listOf(JsonPrimitive(5))))).toString()
     }
     if (root["schemaVersion"]?.jsonPrimitive?.longOrNull != 4L) return raw
-    val updated = root.toMutableMap().apply { put("schemaVersion", JsonPrimitive(5)) }
+    // Validate and project the retained wire first; this synthetic fixture then supplies the v5 opening.
+    val projected = PlatformWireCodec.json.encodeToJsonElement(
+        PlatformManagedSnapshot.serializer(), PlatformWireCodec.decode<PlatformManagedSnapshot>(raw),
+    ).jsonObject
+    val updated = projected.toMutableMap().apply { put("schemaVersion", JsonPrimitive(5)) }
     val starters = root["starters"] as? JsonArray
     if (starters != null) updated["starters"] = JsonArray(starters.map { value ->
         val starter = value.jsonObject

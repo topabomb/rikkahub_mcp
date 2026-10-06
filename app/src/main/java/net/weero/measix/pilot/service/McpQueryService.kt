@@ -18,6 +18,9 @@ import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
+import net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason
+import net.weero.measix.pilot.data.ai.mcp.toolAccess
+import net.weero.measix.pilot.data.enterprise.PlatformMcpDefinitionToolAccessMode
 import net.weero.measix.pilot.data.ai.mcp.mcpDefinitionDigest
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -40,9 +43,10 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 data class McpToolPresentation(
     val name: String,
     val description: String?,
-    val inputSchema: JsonObject,
+    val inputSchema: JsonObject?,
     val enabled: Boolean,
     val needsApproval: Boolean,
+    val unavailableReason: McpToolUnavailableReason? = null,
 )
 
 internal data class McpServerPresentation(
@@ -57,12 +61,14 @@ internal data class McpServerPresentation(
     val status: McpStatus,
     val sessionCallable: Boolean,
     val tools: List<McpToolPresentation>,
+    val allowsAllTools: Boolean? = null,
+    val directoryConfirmed: Boolean = false,
 ) {
     val scope: ConfigurationScope get() = access.scope
-    val hasCatalogTools: Boolean get() = tools.isNotEmpty()
+    val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
     val isCallable: Boolean get() = enabled && unavailableReason == null && sessionCallable && tools.any { it.enabled }
     val isBusy: Boolean
-        get() = !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
+        get() = !directoryConfirmed && !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
 }
 
 internal sealed interface McpCatalogReadState {
@@ -148,6 +154,9 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
         it.key.category == ConfigurationCategory.MCP || it.key.category == ConfigurationCategory.GATEWAY
     }.map { resource ->
         val capability = capabilities[resource.key.reference] ?: McpRuntimeCapability.EMPTY
+        val managed = configuration.enterpriseConfiguration?.mcpServers?.find {
+            it.id == (resource.key.reference as? ConfigurationReference.Enterprise)?.id
+        }
         val user = userSettings.mcpServers.singleOrNull { it.id == resource.key.reference }
         if (user != null) user.toPresentation(capability).copy(
             access = access, unavailableReason = resource.access.unavailableReason,
@@ -158,7 +167,14 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
             unavailableReason = resource.access.unavailableReason, requiredEnabled = resource.access.requiredEnabled,
             gatewayEnablement = resource.gatewayEnablement, status = capability.status,
             sessionCallable = capability.sessionCallable,
-            tools = capability.catalog?.tools.orEmpty().map { McpToolPresentation(it.name, it.description, it.inputSchema, true, false) },
+            tools = managed?.toolAccess(capability.catalog?.tools.orEmpty())
+                ?.filter { it.unavailableReason != McpToolUnavailableReason.NOT_ALLOWED }
+                ?.map { McpToolPresentation(it.name, it.tool?.description, it.tool?.inputSchema,
+                    it.enabled, it.needsApproval,
+                    if (capability.catalog == null) McpToolUnavailableReason.DIRECTORY_UNAVAILABLE else it.unavailableReason) }
+                ?: capability.catalog?.tools.orEmpty().map { McpToolPresentation(it.name, it.description, it.inputSchema, true, false) },
+            allowsAllTools = managed?.let { it.toolAccessMode == PlatformMcpDefinitionToolAccessMode.ALL },
+            directoryConfirmed = capability.catalog != null,
         )
     }
 }
@@ -186,6 +202,7 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         definition = this,
         status = presentedStatus,
         sessionCallable = runtime.sessionCallable && activeCatalog != null,
+        directoryConfirmed = activeCatalog != null,
         tools = activeCatalog?.tools.orEmpty().map { descriptor ->
             val policy = policies[descriptor.name]
             McpToolPresentation(

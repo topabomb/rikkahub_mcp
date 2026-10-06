@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.enterprise.reference
 
 import me.rerere.common.configuration.ConfigurationReference
 
@@ -40,6 +41,37 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 @OptIn(ExperimentalCoroutinesApi::class)
 class McpCatalogStoreTest {
+    @Test fun `successful empty Direct directory replaces old tools and survives recovery while personal stays rejected`() = runTest {
+        val scope = AppScope(Dispatchers.Default.limitedParallelism(1))
+        try {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val settings = mockk<SettingsStore>()
+            coEvery { settings.pendingMcpCatalogMigration() } returns null
+            val preferences = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+                scope = scope, produceFile = { java.io.File(context.cacheDir, "direct-${kotlin.uuid.Uuid.random()}.preferences_pb") },
+            )
+            val store = McpCatalogStore(preferences, scope, settings)
+            val identity = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage().identity
+            val id = identity.reference("mcp_${kotlin.uuid.Uuid.random()}")
+            val managed = McpManagedCatalog(1)
+            val tool = McpCatalogTool("read", inputSchema = buildJsonObject { put("type", "object") })
+            val populated = McpCatalogCandidate(identity.scope, id, "managed-definition", listOf(tool), managed)
+            val first = store.commitCandidate(populated) as McpCatalogCommitResult.Committed
+            val empty = store.commitCandidate(populated.copy(tools = emptyList())) as McpCatalogCommitResult.Committed
+            assertEquals(first.snapshot.revision + 1, empty.snapshot.revision)
+            assertEquals(empty.snapshot, requireNotNull(empty.snapshot.validated()))
+            assertEquals(empty.snapshot, store.catalogs.value.getValue(populated.key))
+            assertEquals(empty.snapshot, store.commitCandidate(populated.copy(tools = emptyList())).let {
+                (it as McpCatalogCommitResult.Unchanged).snapshot
+            })
+            val user = McpCatalogCandidate(ConfigurationScope.Personal, ConfigurationReference.random(), "personal", emptyList())
+            org.junit.Assert.assertTrue(store.commitCandidate(user) is McpCatalogCommitResult.RejectedEmpty)
+            val recovered = McpCatalogStore(preferences, scope, settings)
+            recovered.awaitReady()
+            assertEquals(empty.snapshot, recovered.catalogs.value.getValue(populated.key))
+        } finally { scope.cancel() }
+    }
+
     @Test
     fun `only complete non-empty catalog advances the durable revision`() = runTest {
         val scope = AppScope(Dispatchers.Default.limitedParallelism(1))

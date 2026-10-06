@@ -191,7 +191,7 @@ class StarterEntryFlowAndroidTest {
                 val execution = candidate.execution as EnterpriseExecution.Platform
                 val session = EnterpriseSession(id, candidate.identity, expiry,
                     PlatformSessionDetails(execution.connection, "dev_${Uuid.random()}", credential))
-                store.commit(EnterpriseManifest(6, EnterpriseSessionPhase.READY, session, applied, candidate.identity.scope, candidate.identity))
+                store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, applied, candidate.identity.scope, candidate.identity))
                 val sessions = EnterpriseSessionController(store).apply { recover() }
                 val fixture = Fixture(root, sessions, candidate, requireNotNull(sessions.readPresentation().selection))
                 if (draft) {

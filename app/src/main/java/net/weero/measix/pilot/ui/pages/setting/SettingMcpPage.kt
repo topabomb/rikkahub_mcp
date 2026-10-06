@@ -60,6 +60,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -75,8 +76,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -94,6 +97,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -108,6 +112,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -142,6 +153,8 @@ import net.weero.measix.pilot.service.ConfigurationApplicationService
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
+import net.weero.measix.pilot.ui.components.ai.mcpServerStatusText
+import net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason
 import androidx.compose.runtime.key
 import kotlinx.coroutines.ensureActive
 import net.weero.measix.pilot.service.McpToolPresentation
@@ -258,7 +271,7 @@ internal fun SettingMcpPage(
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = {
                     Text(stringResource(R.string.setting_mcp_page_title))
                 },
@@ -312,7 +325,7 @@ internal fun SettingMcpPage(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
                     start = innerPadding.calculateStartPadding(layoutDirection) + 16.dp,
-                    top = innerPadding.calculateTopPadding() + 16.dp,
+                    top = innerPadding.calculateTopPadding() + 8.dp,
                     end = innerPadding.calculateEndPadding(layoutDirection) + 16.dp,
                     bottom = innerPadding.calculateBottomPadding() + 16.dp,
                 )
@@ -347,9 +360,10 @@ internal fun SettingMcpPage(
                 }
                 if (managedServers.isNotEmpty()) {
                     item {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(stringResource(R.string.mcp_enterprise_definitions), style = MaterialTheme.typography.titleMedium)
-                            Text(stringResource(R.string.mcp_enterprise_read_only), style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.mcp_enterprise_definitions), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.mcp_enterprise_read_only), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -358,7 +372,7 @@ internal fun SettingMcpPage(
                         key(selection) { ManagedMcpServerItem(server, selection, configurationCommands) }
                     }
                 }
-                if (managedServers.isNotEmpty()) {
+                if (managedServers.isNotEmpty() && mcpConfigs.isNotEmpty()) {
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.mcp_user_definitions), style = MaterialTheme.typography.titleMedium)
@@ -487,10 +501,62 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
     var submitting by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
     Card(colors = CardDefaults.cardColors(containerColor = CustomColors.listItemColors.containerColor)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(server.name, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                Tag(type = TagType.WARNING) { Text(stringResource(R.string.managed_configuration_source_managed)) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val hasTools = server.tools.isNotEmpty()
+            val countLabel = if (!server.directoryConfirmed && !server.hasCatalogTools) {
+                stringResource(R.string.mcp_tools_count, server.tools.size)
+            } else stringResource(R.string.mcp_enabled_tools_count, server.tools.count { it.enabled }, server.tools.size)
+            val expansionLabel = stringResource(if (expanded) R.string.code_block_collapse else R.string.code_block_expand)
+            val scopeLabel = server.allowsAllTools?.let { all ->
+                stringResource(if (all) R.string.mcp_managed_all_tools else R.string.mcp_managed_approved_tools)
+            }
+            val requiredLabel = if (server.requiredEnabled && server.gatewayEnablement == null) {
+                stringResource(R.string.mcp_enterprise_required)
+            } else null
+            // The name and scope share one full-size target; a separate button would inflate the title row.
+            Column(
+                modifier = Modifier.fillMaxWidth().then(if (hasTools) Modifier
+                    .heightIn(min = 48.dp)
+                    .clickable(role = Role.Button, onClickLabel = expansionLabel) { expanded = !expanded }
+                    .semantics { this[SemanticsProperties.ContentDescription] = listOfNotNull(server.name, countLabel, scopeLabel, requiredLabel) }
+                    else Modifier),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(server.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    if (hasTools) {
+                        val countText = if (!server.directoryConfirmed && !server.hasCatalogTools) server.tools.size.toString()
+                            else "${server.tools.count { it.enabled }}/${server.tools.size}"
+                        Text(countText, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        Icon(if (expanded) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01, null,
+                            modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    scopeLabel?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    requiredLabel?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+            server.unavailableReason?.let {
+                Text(configurationUnavailableText(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (server.unavailableReason == null && (server.status !is McpStatus.Ready || server.tools.isEmpty())) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (server.isBusy) CircularProgressIndicator(Modifier.size(20.dp))
+                    Text(
+                        mcpServerStatusText(server.status, server.tools, server.directoryConfirmed, server.sessionCallable),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = if (server.status is McpStatus.Error) 3 else Int.MAX_VALUE,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (server.status is McpStatus.Error || server.status == McpStatus.NeedsAuthorization ||
+                            server.status == McpStatus.CatalogRejectedEmpty) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                (server.status as? McpStatus.Error)?.let { error ->
+                    DiagnosticDisclosure(detail = error.detail ?: error.message ?: failureText, title = server.name,
+                        contentPadding = PaddingValues(horizontal = 0.dp))
+                }
             }
             server.gatewayEnablement?.let { gateway ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -510,21 +576,10 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
                     })
                 }
                 Text(stringResource(if (gateway.canChange) R.string.mcp_gateway_preference_hint else R.string.mcp_enterprise_required),
-                    style = MaterialTheme.typography.bodySmall)
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (server.requiredEnabled && server.gatewayEnablement == null) {
-                Text(stringResource(R.string.mcp_enterprise_required), style = MaterialTheme.typography.bodySmall)
-            }
-            server.unavailableReason?.let { Text(configurationUnavailableText(it), color = MaterialTheme.colorScheme.error) }
-            if (server.isBusy) CircularProgressIndicator(Modifier.size(24.dp))
-            (server.status as? McpStatus.Error)?.let { Text(it.message ?: failureText, color = MaterialTheme.colorScheme.error) }
-            if (server.tools.isNotEmpty()) {
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(stringResource(R.string.mcp_enabled_tools_count, server.tools.size, server.tools.size))
-                }
-                if (expanded) server.tools.forEach { tool ->
-                    key(tool.name) { McpToolCard(tool, {}, {}, editable = false) }
-                }
+            if (expanded) server.tools.forEach { tool ->
+                key(tool.name) { McpToolCard(tool, {}, {}, editable = false) }
             }
         }
     }
@@ -853,6 +908,7 @@ private fun McpServerItem(
 internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspend (McpServerConfig) -> Unit) {
     state.EditStateContent { config, updateValue ->
         val pagerState = rememberPagerState { 2 }
+        val compactTools = pagerState.settledPage == 1
         val scope = rememberCoroutineScope()
         var saving by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<Throwable?>(null) }
@@ -866,8 +922,8 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.9f)
-                    .padding(16.dp),
+                    .then(if (compactTools) Modifier else Modifier.fillMaxHeight(0.9f))
+                    .padding(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 SecondaryTabRow(
@@ -882,7 +938,7 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
                             }
                         },
                         text = {
-                            Text(stringResource(R.string.setting_mcp_page_basic_settings))
+                            Text(stringResource(R.string.setting_mcp_page_basic_settings), style = MaterialTheme.typography.labelMedium)
                         }
                     )
                     Tab(
@@ -893,14 +949,14 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
                             }
                         },
                         text = {
-                            Text(stringResource(R.string.setting_mcp_page_tools))
+                            Text(stringResource(R.string.setting_mcp_page_tools), style = MaterialTheme.typography.labelMedium)
                         }
                     )
                 }
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1f, fill = !compactTools)
                         .fillMaxWidth()
                 ) { page ->
                     when (page) {
@@ -1370,7 +1426,7 @@ private fun McpToolsConfigure(
         )
     }
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -1423,73 +1479,70 @@ private fun McpToolCard(
     editable: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val hasDetails = !tool.description.isNullOrBlank() ||
+        !(tool.inputSchema?.get("properties") as? JsonObject).isNullOrEmpty()
+    val confirmationLabel = stringResource(R.string.setting_mcp_page_needs_approval)
+    val enabledLabel = stringResource(R.string.setting_mcp_page_enable)
+    val toolReason = tool.unavailableReason?.takeUnless { !editable && it == McpToolUnavailableReason.DIRECTORY_UNAVAILABLE }
+    val toolReasonText = toolReason?.let { net.weero.measix.pilot.ui.components.ai.mcpToolUnavailableText(it) }
+    val toolConfirmationText = if (!editable && tool.enabled && tool.needsApproval && tool.unavailableReason == null) confirmationLabel else null
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = CustomColors.listItemColors.containerColor
-        )
+        colors = CardDefaults.cardColors(containerColor = CustomColors.listItemColors.containerColor)
     ) {
         Column(
-            modifier = Modifier
-                .animateContentSize()
-                .fillMaxWidth()
-                .padding(8.dp),
+            modifier = Modifier.animateContentSize().fillMaxWidth().padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 第一行：工具名字和3个按钮
+            val expansionLabel = stringResource(if (expanded) R.string.code_block_collapse else R.string.code_block_expand)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().then(if (hasDetails) Modifier
+                    .heightIn(min = 32.dp)
+                    .clickable(role = Role.Button, onClickLabel = expansionLabel) { expanded = !expanded }
+                    .semantics { this[SemanticsProperties.ContentDescription] = listOfNotNull(tool.name, toolConfirmationText, toolReasonText, expansionLabel) }
+                    else Modifier),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                Text(
-                    text = tool.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (editable) {
-                    // 需要审批开关
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.setting_mcp_page_needs_approval),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        Switch(
-                            checked = tool.needsApproval,
-                            onCheckedChange = onNeedsApprovalChange,
-                            size = SwitchSize.Small
-                        )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(text = tool.name, style = MaterialTheme.typography.titleMedium)
+                    toolConfirmationText?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    // 启用开关
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = "启用",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        Switch(
-                            checked = tool.enabled,
-                            onCheckedChange = onEnableChange,
-                            size = SwitchSize.Small
-                        )
+                    toolReasonText?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall,
+                            color = if (toolReason == McpToolUnavailableReason.DIRECTORY_UNAVAILABLE) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.error)
                     }
                 }
-                // 展开/收起按钮
-                IconButton(
-                    onClick = { expanded = !expanded },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        if (expanded) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
+                if (hasDetails) {
+                    Icon(if (expanded) HugeIcons.ArrowUp01 else HugeIcons.ArrowDown01, null,
+                        modifier = Modifier.padding(top = 4.dp).size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (editable) {
+                // Wrapped compact controls leave enough room for their expanded system touch targets.
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(enabledLabel, style = MaterialTheme.typography.labelSmall)
+                            Switch(checked = tool.enabled, onCheckedChange = onEnableChange, size = SwitchSize.Small,
+                                modifier = Modifier.minimumInteractiveComponentSize().semantics {
+                                    contentDescription = enabledLabel
+                                    role = Role.Switch
+                                    toggleableState = if (tool.enabled) ToggleableState.On else ToggleableState.Off
+                                })
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(confirmationLabel, style = MaterialTheme.typography.labelSmall)
+                            Switch(checked = tool.needsApproval, onCheckedChange = onNeedsApprovalChange, size = SwitchSize.Small,
+                                modifier = Modifier.minimumInteractiveComponentSize().semantics {
+                                    contentDescription = confirmationLabel
+                                    role = Role.Switch
+                                    toggleableState = if (tool.needsApproval) ToggleableState.On else ToggleableState.Off
+                                })
+                        }
+                    }
                 }
             }
             // 展开后显示描述和参数
@@ -1503,7 +1556,7 @@ private fun McpToolCard(
                     )
                 }
                 // 参数标签
-                tool.inputSchema.let { schema ->
+                tool.inputSchema?.let { schema ->
                     val properties = schema["properties"] as? kotlinx.serialization.json.JsonObject
                     val required = (schema["required"] as? kotlinx.serialization.json.JsonArray)
                         ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }

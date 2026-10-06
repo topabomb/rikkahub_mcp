@@ -20,11 +20,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,7 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.util.fastFilter
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
@@ -46,8 +50,9 @@ import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.AssistantMcpChoice
 import net.weero.measix.pilot.service.McpServerPresentation
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
-import net.weero.measix.pilot.ui.components.ui.Tag
-import net.weero.measix.pilot.ui.components.ui.TagType
+import net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason
+import net.weero.measix.pilot.service.McpToolPresentation
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 
 @Composable
 internal fun McpPickerListItem(
@@ -205,122 +210,149 @@ internal fun McpPicker(
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(servers, key = { it.serverId.toString() }) { server ->
             val status = server.status
             Card {
-                Row(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    when (status) {
-                        McpStatus.Idle -> Icon(HugeIcons.Icon1stBracket, null)
-                        McpStatus.Connecting -> if (server.hasCatalogTools) {
-                            Icon(HugeIcons.McpServer, null)
-                        } else {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-
-                        McpStatus.Discovering -> if (server.hasCatalogTools) {
-                            Icon(HugeIcons.McpServer, null)
-                        } else {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-                        is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
-                        is McpStatus.Reconnecting -> if (status.maintenance || server.hasCatalogTools) {
-                            Icon(HugeIcons.Clock02, null)
-                        } else {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-                        is McpStatus.RetryScheduled,
-                        McpStatus.WaitingNetwork,
-                        is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
-                        McpStatus.CatalogRejectedEmpty,
-                        is McpStatus.Error -> Icon(HugeIcons.Alert01, null)
-                        McpStatus.NeedsAuthorization -> Icon(HugeIcons.Alert01, null)
-                        McpStatus.Authorizing -> if (server.hasCatalogTools) {
-                            Icon(HugeIcons.Clock02, null)
-                        } else {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-                    }
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = server.name,
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        Text(
-                            text = when (val s = status) {
-                                is McpStatus.Idle -> stringResource(R.string.mcp_status_idle)
-                                is McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
-                                is McpStatus.Discovering -> stringResource(R.string.mcp_status_discovering)
-                                is McpStatus.Ready -> stringResource(R.string.mcp_status_ready, s.toolCount)
-                                is McpStatus.Reconnecting -> if (s.maintenance) {
-                                    stringResource(R.string.mcp_status_maintenance_reconnecting)
-                                } else {
-                                    stringResource(R.string.mcp_status_reconnecting, s.attempt, s.maxAttempts)
-                                }
-                                is McpStatus.RetryScheduled -> if (s.maintenance) {
-                                    stringResource(
-                                        R.string.mcp_status_maintenance_retry,
-                                        (s.retryInMs / 1000).toInt(),
-                                    )
-                                } else {
-                                    stringResource(
-                                        R.string.mcp_status_retry_scheduled,
-                                        s.attempt,
-                                        s.maxAttempts,
-                                        (s.retryInMs / 1000).toInt(),
-                                    )
-                                }
-                                is McpStatus.WaitingNetwork -> stringResource(R.string.mcp_status_waiting_network)
-                                McpStatus.CatalogRejectedEmpty -> stringResource(R.string.mcp_status_catalog_rejected_empty)
-                                is McpStatus.CatalogStale -> stringResource(R.string.mcp_status_catalog_stale, s.lastKnownGoodCount)
-                                is McpStatus.Error -> s.message?.let {
-                                    stringResource(R.string.mcp_status_error, it)
-                                } ?: stringResource(R.string.error_title_operation)
-                                is McpStatus.NeedsAuthorization -> stringResource(R.string.mcp_status_needs_authorization)
-                                is McpStatus.Authorizing -> stringResource(R.string.mcp_status_authorizing)
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LocalContentColor.current.copy(alpha = 0.8f),
-                            maxLines = 5
-                        )
-                        if (server.tools.isNotEmpty()) {
-                            val tools = server.tools
-                            val enabledTools = tools.fastFilter { it.enabled }
-                            Tag(
-                                type = TagType.INFO
-                            ) {
-                                Text("${enabledTools.size}/${tools.size} tools")
+                        when (status) {
+                            McpStatus.Idle -> Icon(HugeIcons.Icon1stBracket, null)
+                            McpStatus.Connecting, McpStatus.Discovering -> if (server.hasCatalogTools || server.directoryConfirmed) {
+                                Icon(HugeIcons.McpServer, null)
+                            } else {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                            is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
+                            is McpStatus.Reconnecting -> if (status.maintenance || server.hasCatalogTools || server.directoryConfirmed) {
+                                Icon(HugeIcons.Clock02, null)
+                            } else {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                            is McpStatus.RetryScheduled, McpStatus.WaitingNetwork,
+                            is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
+                            McpStatus.CatalogRejectedEmpty, is McpStatus.Error,
+                            McpStatus.NeedsAuthorization -> Icon(HugeIcons.Alert01, null)
+                            McpStatus.Authorizing -> if (server.hasCatalogTools || server.directoryConfirmed) {
+                                Icon(HugeIcons.Clock02, null)
+                            } else {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             }
                         }
-                        server.unavailableReason?.let { reason ->
-                            Text(configurationUnavailableText(reason), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error)
-                        }
-                        if (server.fixedByDefinition) {
-                            Text(
-                                stringResource(R.string.assistant_usage_inherited_binding),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Text(
+                            text = server.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Keep the system's 48dp touch target without reserving it again inside the padded header.
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                            Switch(
+                                modifier = Modifier.semantics { contentDescription = server.name },
+                                checked = server.selected,
+                                enabled = server.canToggle,
+                                onCheckedChange = { onToggle(server.serverId, it) },
                             )
                         }
                     }
-                    Switch(
-                        checked = server.selected,
-                        enabled = server.canToggle,
-                        onCheckedChange = { onToggle(server.serverId, it) },
+                    // Connection and admission describe the whole server; cached tools do not prove it is callable.
+                    Text(
+                        text = server.unavailableReason?.let { configurationUnavailableText(it) }
+                            ?: mcpServerStatusText(status, server.tools, server.directoryConfirmed, server.sessionCallable),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = if (status is McpStatus.Error && server.unavailableReason == null) 3 else Int.MAX_VALUE,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (server.unavailableReason != null || status is McpStatus.Error ||
+                            status == McpStatus.NeedsAuthorization || status == McpStatus.CatalogRejectedEmpty ||
+                            (status is McpStatus.Ready && server.sessionCallable && server.tools.any { it.unavailableReason != null } &&
+                                server.tools.none { it.enabled })) {
+                            MaterialTheme.colorScheme.error
+                        } else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (status is McpStatus.Error && server.unavailableReason == null) {
+                        DiagnosticDisclosure(
+                            detail = status.detail ?: status.message ?: stringResource(R.string.error_title_operation),
+                            title = server.name,
+                            contentPadding = PaddingValues(horizontal = 0.dp),
+                        )
+                    }
+                    if (status !is McpStatus.Ready && server.directoryConfirmed) {
+                        Text(
+                            if (server.tools.isEmpty()) stringResource(R.string.mcp_managed_empty_directory)
+                            else stringResource(R.string.mcp_enabled_tools_count, server.tools.count { it.enabled }, server.tools.size),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (server.selectsAllTools != null || server.fixedByDefinition) {
+                        val scope = when (server.selectsAllTools) {
+                            true -> stringResource(R.string.mcp_assistant_all_tools)
+                            false -> stringResource(R.string.mcp_assistant_selected_tools)
+                            null -> null
+                        }
+                        val fixed = if (server.fixedByDefinition) stringResource(R.string.mcp_assistant_fixed_binding) else null
+                        Text(
+                            listOfNotNull(scope, fixed).joinToString(" · "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+internal fun mcpServerStatusText(
+    status: McpStatus,
+    tools: List<McpToolPresentation>,
+    directoryConfirmed: Boolean,
+    sessionCallable: Boolean,
+): String = when (status) {
+    McpStatus.Idle -> stringResource(
+        if (!directoryConfirmed && tools.none { it.inputSchema != null }) R.string.mcp_tool_directory_unavailable
+        else R.string.mcp_status_idle,
+    )
+    McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
+    McpStatus.Discovering -> stringResource(R.string.mcp_status_discovering)
+    is McpStatus.Ready -> when {
+        directoryConfirmed && tools.isEmpty() -> stringResource(R.string.mcp_managed_empty_directory)
+        !sessionCallable -> stringResource(R.string.mcp_enabled_tools_count, tools.count { it.enabled }, tools.size)
+        tools.any { it.unavailableReason != null } -> stringResource(
+            R.string.mcp_tools_partially_available,
+            tools.count { it.enabled },
+            tools.count { it.unavailableReason != null },
+        )
+        else -> stringResource(R.string.mcp_status_ready, tools.count { it.enabled })
+    }
+    is McpStatus.Reconnecting -> if (status.maintenance) stringResource(R.string.mcp_status_maintenance_reconnecting)
+        else stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
+    is McpStatus.RetryScheduled -> if (status.maintenance) {
+        stringResource(R.string.mcp_status_maintenance_retry, (status.retryInMs / 1000).toInt())
+    } else stringResource(R.string.mcp_status_retry_scheduled, status.attempt, status.maxAttempts, (status.retryInMs / 1000).toInt())
+    McpStatus.WaitingNetwork -> stringResource(R.string.mcp_status_waiting_network)
+    McpStatus.CatalogRejectedEmpty -> stringResource(R.string.mcp_status_catalog_rejected_empty)
+    is McpStatus.CatalogStale -> stringResource(R.string.mcp_status_catalog_stale, status.lastKnownGoodCount)
+    is McpStatus.Error -> status.message?.let { stringResource(R.string.mcp_status_error, it) }
+        ?: stringResource(R.string.error_title_operation)
+    McpStatus.NeedsAuthorization -> stringResource(R.string.mcp_status_needs_authorization)
+    McpStatus.Authorizing -> stringResource(R.string.mcp_status_authorizing)
+}
+
+@Composable
+internal fun mcpToolUnavailableText(reason: McpToolUnavailableReason): String =
+    stringResource(when (reason) {
+        McpToolUnavailableReason.DIRECTORY_UNAVAILABLE -> R.string.mcp_tool_directory_unavailable
+        McpToolUnavailableReason.NOT_ALLOWED -> R.string.mcp_tool_not_allowed
+        McpToolUnavailableReason.NOT_SELECTED -> R.string.mcp_tool_not_selected
+        McpToolUnavailableReason.MISSING -> R.string.mcp_tool_missing
+        McpToolUnavailableReason.CONTRACT_CHANGED -> R.string.mcp_tool_contract_changed
+    })

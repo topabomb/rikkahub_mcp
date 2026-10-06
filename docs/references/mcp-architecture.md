@@ -14,7 +14,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 因此：
 
 - timeout、断网、5xx、后台、Doze、连接重建和重试耗尽只改变连接健康，不删除同 definition 的已确认目录；
-- 用户手工刷新和服务端 `notifications/tools/list_changed` 是明确的目录重验请求；只有完整、合法、非空的
+- 用户手工刷新和服务端 `notifications/tools/list_changed` 是明确的目录重验请求；只有完整、合法的
   `tools/list` 结果成功落盘后，才原子替换后续 turn 的 schema；
 - 当前运行中的 turn 只使用 run-start 快照。目录刷新、网络变化或 Settings revision 不会改写已经发给 Provider 的工具前缀；
 - 用户禁用/删除 server、修改连接 definition、禁用工具或收紧审批，是本地明确撤销。旧快照在远端副作用前 fail-closed；
@@ -27,7 +27,7 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 | --- | --- | --- | --- |
 | 用户 MCP 定义、启用状态与工具 enable/approval policy | `SettingsStore` | Settings DataStore | Coordinator、Query、Turn 捕获 |
 | 企业 MCP 定义与执行描述 | `EnterpriseAppliedStore` / `EnterpriseSessionController` | Applied manifest 与不可变配置 | `ConfigurationResolver` 解析；平台 binding 不转换为用户配置 |
-| 完整非空远端工具目录 | `McpCatalogStore` | `mcp_catalog` DataStore | Runtime 启动恢复和提交 |
+| 完整远端工具目录 | `McpCatalogStore` | `mcp_catalog` DataStore | Runtime 启动恢复和提交 |
 | 跨 server 注册表、触发汇流和并发预算 | `McpRuntimeCoordinator` | AppScope 内存 | application / turn |
 | client、generation、授权 Job、刷新与恢复调度、连接健康 | 每 `McpRuntimeKey` 一个 `McpServerRuntime` | AppScope 内存 | `McpRuntimeStateStore` |
 | OAuth 网络流程、refresh single-flight 与 Settings CAS | `McpOAuthCoordinator` | AppScope + Settings | `McpServerRuntime` / invocation admission |
@@ -61,7 +61,18 @@ Session 锁可阻止退出状态并发写入，但不能阻止墙上时钟越过
 
 平台连接使用 `McpConnectionDefinition.ManagedPlatform`。平台连接消费同一顶层模型捕获的 AppliedVersion 与 interactionId，以原 Session 签发执行 lease；完整 URL 来自 Platform execution，不构造 Local binding。`McpProtocolClientFactory` 仍唯一创建 SDK transport/client，平台 Bearer 由原 lease 的请求回调在每个 POST/GET 之前取得，刷新 I/O 不进入配置/Runtime 锁。平台 catalog digest 只含身份、公开 route、release/hash、generation 和 authOwnership，token 轮换不改变目录或连接身份。只读目录检查使用 `readExecution`，不要求网络或额外执行 lease。
 
-Direct MCP 只装配已解析助手选中的服务；企业固定引用不可删，允许的扩展来自本域偏好。
+Direct MCP 只装配已解析助手选中的服务。企业助手仅使用发布的 `mcpBindings`；固定引用不可删，
+使用偏好不能增加未绑定的受管服务或恢复已移除的绑定。准入允许时仍可添加用户 MCP；用户助手可选择本域受管服务。
+
+服务 ALL 使用动态发现目录，不增加逐次确认，也不锁定企业发布哈希。服务 ALLOWLIST 使用准确工具名和完整 Tool 的
+JCS UTF-8 SHA-256 `contractHash`，包括 description、outputSchema、annotations、`_meta` 和扩展字段。
+`McpCatalogTool.contractHash` 与共享 `mcp-tool-contract-vectors.json` 验证 Unicode、属性顺序和 ECMAScript 数字语义。
+无法按 JCS 编码的定义在 ALLOWLIST 中仅使该工具按契约不匹配不可用，不中断其他工具的投影；ALL 不要求此摘要。
+助手 ALL 不增加过滤；助手 ALLOWLIST 取名称子集，不能越过服务授权上限。`EnterpriseMcpResource.toolAccess`
+是 Turn 捕获、只读检查、UI 与调用门共同使用的纯投影，不保存第二份授权状态。
+ALLOWLIST 仅按发布的 AUTO/REQUIRE_CONFIRMATION 决定审批，不从远端 annotations 推断。
+审批复用原 `ToolCallRuntime`、`ToolBatchRunner` 和同一 Turn 的继续协议；Target 仍是 USER_INPUT_ONLY，
+需要明确确认的工具返回 `approval_unavailable`，ALL 不增加人工交互。
 企业策略禁用用户 MCP 时，准备结果保留 `POLICY_BLOCKED` 结果供界面提示，但不建立连接或阻断对话；设置页仍显示原选择并允许移除。
 其他显式引用不可执行时准备失败。Gateway 独立装配完整工具对，REQUIRED 目录未就绪时拒绝准备。
 Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session、助手和资源是否存在。
@@ -128,7 +139,7 @@ token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 user
 ### 目录持久化与版本
 
 从曾将完整 schema 写在 Settings 的版本升级时，DataStore migration 在重写 policy-only Settings 的同一事务中生成一次性
-catalog staging；`McpCatalogStore` 只接收完整、非空候选，提交后删除 staging，不保留旧 schema 读取旁路。手工备份 v4/v5 将
+catalog staging；`McpCatalogStore` 从个人迁移 staging 只接收完整、非空候选，提交后删除 staging，不保留旧 schema 读取旁路。手工备份 v4/v5 将
 `mcp_catalogs.json` 作为 manifest 必需根；恢复 v3 时执行同样的一次性提取。备份恢复先让已经取得租约的旧迁移完成，再用
 备份目录替换个人 Catalog，保留企业主体的目录，避免旧 staging 在恢复后写回孤儿目录。
 
@@ -148,6 +159,10 @@ Deployment、User 完整主体；Session 不进入持久化目录身份。`catal
 Gateway surface 改变被拒绝。私有 binding 可在同 generation 轮换而改变 definition digest，
 目录发布另在原 Session 的 Applied revision gate 内验证，旧 binding 的发现结果不能覆盖新配置目录。
 旧 interaction 可保留原 binding 与已确认目录；发布不再获准时只能沿用匹配的已确认目录，无目录则明确失败。
+同一 definition 的目录被其他 interaction 刷新后，初次和最终调用准入均读取 `McpCatalogStore` 最新已发布目录，
+工具删除或契约变化不能由原 Runtime 缓存绕过。`McpRuntimeStateStore.publish` 同步更新同一 key、definitionDigest 和
+managed 元数据的已有 Runtime 目录，保留各自连接状态、诊断和 sessionCallable；旧刷新恢复也不能倒退已知 revision。
+因此 durable head 被新发布替换后，旧 interaction 仍保留原发布最后确认的删除结果；不同发布不改写其捕获的 Provider schema。
 相同工具随新 generation 发布时仍持久化新 generation。这不能代替原 Session 的执行准入或服务端 428 barrier。
 
 ### Gateway 目录约束
@@ -201,7 +216,7 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 4. 保留原始完整 Tool `JsonObject`，从中投影 Schema，保留 `$schema`、`$defs`、`$ref` 与扩展字段；
 5. 全部页面成功后才形成 candidate；
 6. `McpCatalogStore.commitCandidate()` 在单一 commit mutex 下计算 digest、revision 并原子落盘；
-7. 空目录不会成为稳定目录，也不会覆盖 LKG；相同 digest 是 no-op；
+7. 完整成功的受管 Direct MCP 空目录正常提交并替换旧工具；个人空目录仍拒绝并保留 LKG，Gateway 仍须完整工具对；相同 digest 是 no-op；
 8. definition 已变化时旧目录不再匹配，不能借 LKG 伪装新 server 已发现。
 
 Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进进程内 head token；低 generation 拒绝不推进 token，不能夺取较新提交的补偿权。若 Server Runtime 在持久化后发现 connection lease 已过期，只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
@@ -224,7 +239,7 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 | 用户禁用/删除/修改 definition | teardown、撤销旧 binding；删除时清理 durable catalog | 是 |
 | 用户禁用工具/收紧审批 | 调用前重验本地 policy | 后续 run 更新；旧 run 调用 fail-closed |
 
-手工刷新与 `list_changed` 的共同点是“重新发现并提交”，不是直接清空 cache。刷新期间继续发布旧目录；分页中断、空目录、
+手工刷新与 `list_changed` 的共同点是“重新发现并提交”，不是直接清空 cache。刷新期间继续发布旧目录；分页中断、个人空目录、
 超时、取消、校验或 DataStore 提交失败均保留 LKG。用户 command 等待其接受的 connection/catalog Job 及合并的 follow-up，
 不能通过观察一个共享 status 猜测完成。前台 receipt 最多等待 20 秒；超时只结束 spinner 并提示剩余 server 在后台继续，
 不会取消 AppScope owner 的连接或发现操作。
@@ -259,12 +274,13 @@ Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：�
 ```text
 Assistant 选择
 ∩ 当前 enabled definition
-∩ definitionDigest 匹配的非空 LKG
-∩ 当前 enable/approval policy
+∩ definitionDigest 匹配的确认目录
+∩ 当前服务工具授权与助手工具选择
+∩ 用户 enable/approval policy 或企业发布的明确审批规则
 ```
 
-`list_changed` 或手工刷新成功后，下一 run 捕获新 revision；当前 run 仍可调用旧 schema，让 server 自己对已删除或修改的
-工具返回协议错误。用户本地明确禁用/删除/definition 修改及 approval tightening 会在调用承诺前拒绝旧 binding。
+`list_changed` 或手工刷新成功后，下一 run 捕获新 revision；当前 run 保留原 Provider schema。受管 Direct MCP 调用前还须在最新确认目录中存在；
+ALLOWLIST 的完整契约须匹配原捕获与当前发布的 hash，ALL 不做 hash 锁定。个人工具仍由 server 对旧 schema 返回协议错误。用户本地明确禁用/删除/definition 修改及 approval tightening 会在调用承诺前拒绝旧 binding。
 
 本地审批前通过共用 `Tool.parseArguments` 检查参数为合法 JSON object；非空损坏 JSON、数组或标量直接失败，
 不会先询问用户或发送 RPC。远端 `inputSchema` 仍完整保留，其完整 schema 与业务参数语义由 Server 校验；
@@ -277,6 +293,10 @@ Assistant 选择
 `status=unknown`，客户端不得自动重放。
 该门只覆盖 Settings 提交或 invocation commitment 这一极短临界区，不覆盖 OAuth、connect、discovery 或远端调用等待，也不
 持有 slot mutex 执行 I/O，因此不会把不同 server 的网络操作重新串行化。
+
+`McpRuntimeCoordinator.callTool()` 将捕获的契约 hash 与 `ToolExecutionContext.approvedByUser` 传到初次和凭据刷新后的
+最终 admission。两次均在原 Session → Settings → Runtime gate 内读取当前企业服务授权及助手绑定；
+移除、授权收紧、契约漂移或缺少实际确认均在不可撤销承诺前拒绝。捕获的连接、release/generation 与 schema 不因此升级。
 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
 调用结束的企业额度刷新按原调用的 `McpConnectionDefinition.ManagedPlatform` 判断；企业空间中的 `User` 连接不发送该信号。
@@ -308,7 +328,11 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 
 - 有 LKG 时，无论 Ready、Reconnecting、WaitingNetwork、RetryScheduled、NeedsAuthorization 或 Error，都显示真实工具数；
 - 只有首次无目录的 Connecting/Discovering/Authorizing 使用 spinner；maintenance recovery 使用静态状态和下次重试信息；
-- 空目录显示 rejected，绝不显示“已连接 0/0 tools”；
+- 个人空目录显示 rejected；受管 Direct MCP 成功空目录显示服务器当前未提供工具，不计入可用工具数；
+- 服务范围、助手范围、确认规则和有效计数只读显示；批准但未发现或契约已变化的工具保留可行动原因，详情渐进展开；
+- MCP 选择卡以名称、连接或准入状态和原开关为主，范围与固定绑定合并为次要说明；Ready 仅在 `sessionCallable` 为真时称工具可用，部分工具缺失或变更按数量汇总，不取目录的首项错误代表整个服务器。首次尚未发现目录使用中性提示，成功空目录与后台重连仍保持可区分；
+- 工具卡的“调用前确认”仅说明可执行工具的显式确认规则；契约变化提示管理员重新发布，两者不混用。只有实际存在描述或参数时提供展开动作；共享用户定义继续使用原启用与确认开关；
+- 企业服务器的目录展开按钮显示紧凑数字，首次未发现目录显示发布项数量，已确认目录显示启用/总量；读屏保留完整的本地化数量说明；
 - 共享用户定义的列表下拉刷新沿用个人连接维护；spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复。企业目录在首次执行时发现，页面只读展示已确认目录，不为浏览建立 interaction；
 - notification stream 单独退化时保留 command transport 与目录，并显示 stale/degraded 原因；前台或手工刷新补齐遗漏；
 - 来源、当前域准入、强制启用、Gateway policy 与工具目录由同一 presentation 提供，Compose 不直连 Manager/Store。

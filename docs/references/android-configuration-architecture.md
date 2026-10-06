@@ -114,13 +114,47 @@ installation ID 在本机企业连接生命周期内稳定。`enrollment_expired
 
 ### 配置格式与兼容
 
-Android 支持的 Snapshot 集合由 `PlatformSnapshotCompatibility.supportedSchemas` 定义，目前为 4、5；Applied manifest 独立使用 `ENTERPRISE_MANIFEST_SCHEMA_VERSION`，目前为 6。不能按 APK 版本、最高格式号或连续区间推断兼容性。
+Android 支持的 Snapshot 集合由 `PlatformSnapshotCompatibility.supportedSchemas` 定义，目前为 4、5；Applied manifest 独立使用 `ENTERPRISE_MANIFEST_SCHEMA_VERSION`，目前为 7。不能按 APK 版本、最高格式号或连续区间推断兼容性。
 
 Core 导出的 `contracts/platform/client-control.openapi.yaml` 与 `manifest.json` 是 wire 来源。`tools/generate-enterprise-wire.py` 核验 LF 规范化摘要，从 Core 的版本化定义生成唯一 `PlatformWire.kt`；`--check` 检查漂移。仓库固定导出使普通构建不依赖 sibling checkout，共享 cases 同时覆盖 v4/v5，并保留 v4 golden。接入和 Portal 合同另固定于 `app/src/test/resources/contracts/portal/`，只能随 Core 的 `api/generated/android/portal/` 更新。
 
-Discovery 与 Bootstrap 先校验控制协议及身份，不因 Snapshot 能力不匹配拒绝有效身份；同步非零目标配置时才校验能力交集，实际下载格式还必须由本次 Bootstrap 宣告。`PlatformWireCodec` 在有界严格 JSON 解码后先检查外层正整数 `schemaVersion`，再按对应 DTO 严格解码；不将非法 v5 降级为 v4。成功响应和 Applied 正文共用 4 MiB 上限。
+Discovery 与 Bootstrap 先校验控制协议及身份，不因 Snapshot 能力不匹配拒绝有效身份；同步非零目标配置时才校验能力交集，实际下载格式还必须由本次 Bootstrap 宣告。`PlatformWireCodec` 在有界严格 JSON 解码后先检查外层正整数 `schemaVersion`，再按该版本的 Android DTO 投影解码；不将非法 v5 降级为 v4。成功响应和 Applied 正文共用 4 MiB 上限。
 
-`PlatformSnapshotMapper` 与 `EnterpriseConfigurationCodec` 都校验领域约束。`ManagedPolicy` 的各项默认引用可省略，缺失表示未设置，不取目录首项或复制 Chat 默认；非空模型引用须指向同快照内已启用模型，附件检查还要求 IMAGE 输入。可选 `imageGenerators` 缺失为空集合，显式 null、未知字段和未知枚举失败关闭。Starter 的 v4/v5 条件和开场保全规则见下文。
+v4 与 v5 的 MCP/助手 DTO 独立生成。`PlatformWireCodec` 先验证 v4 的端侧投影，再从已解码 DTO 把旧 MCP 服务映射为 ALL、
+把去重后的 `mcpServerIds` 投影为 ALL bindings；保留原 schemaVersion，不将非法 v5 降级。
+v5 必须提供服务 `toolAccessMode/allowedTools` 与助手 `mcpBindings`，模式的空/非空关系和服务器授权上限由
+`EnterpriseConfigurationCodec.validateConfiguration` 校验。具体工具交集及执行复验见 [MCP 架构](mcp-architecture.md)。
+
+`EnterpriseAppliedStore` 将 manifest 6 的旧 MCP 配置转换为同等 ALL 规则，在校验原 hash 后写新不可变 revision，
+最后原子发布 manifest 7；旧文件不改写，原 Session、凭据、release/hash、格式版本和空间选择保留。
+未记录的历史格式版本仍为 null。manifest 5 的身份迁移同时完成这一转换；正常存储读取没有旧字段 fallback。
+迁移 staging 失败保留旧 manifest，可重试；原正文损坏时保留身份与 Applied 修复事实并报告 `configurationError`。
+
+### Core 响应的兼容与校验边界
+
+Android 按实际消费用途定义响应投影，不把服务端完整发布/编制 schema 当作端侧的字段白名单。
+`PlatformWireCodec` 在已支持协议版本内递归忽略未进入本端 DTO 的字段，不要求逐个登记扩展名称；
+字段存在不代表权限、功能或默认值。升级 Core 的构建号或增加说明字段不应导致整份配置失败。
+Snapshot 必须先识别 `schemaVersion`，未知合法版本独立报告不兼容，不能降级解析或猜测新语义。
+
+保留的校验必须能说明用途：身份与部署/Session 关联、发布 generation/release/hash 和 ETag 一致性、
+已消费字段的必填/类型/null/范围、执行协议及授权/工具范围/确认策略、资源唯一性与引用闭合、
+运行路径与文件条件、开场正文与顺序、额度的模式和数量。缺失可选字段只使用已定义的缺省语义；
+已消费字段错型或 null 不转为缺省，未知权限或执行枚举不猜测为允许。
+展示枚举只有先定义中性展示或局部不可用行为后才可扩展；未知错误 code 保留为操作失败，不推断身份撤销。
+
+`generate-enterprise-wire.py` 从固定 Core 合同生成端侧投影，新增生成字段前先确认实际消费者。
+当前 Snapshot 发布元数据、v4 Starter 废弃说明和 Problem 的 Admin activation/draft revision 不参与 Android
+显示、持久化或执行，由生成器排除；不为这些字段的必填、格式或变化设置接纳门槛。
+v4 适配只转换已验证 DTO，原始扩展字段不能在 v5 DTO 中重新取得含义；原发布版本与 hash 不变。
+MCP Tool 原始定义及其 JCS contractHash 使用独立的完整定义合同，扩展仍参与摘要，不能套用配置投影的忽略规则。
+
+宽容限于响应读取。Client 提交命令、Bridge 请求/params 和扫码接入资料仍保持明确字段及操作意图；
+本地存储继续由各 owner 的格式与迁移管理。JSON 语法、重复键、嵌套和正文大小限制仍保护读取边界。
+`PlatformWireCodec` 对已消费字段的错型、null、缺失和枚举错误提供稳定 reason 与字段路径，不回显原值或响应正文。
+候选仍沿原接纳和提交链完整验证后原子应用；失败保全身份、历史和原 Applied，成功同步即可恢复，不清库或自动重放。
+
+`PlatformSnapshotMapper` 与 `EnterpriseConfigurationCodec` 都校验领域约束。`ManagedPolicy` 的各项默认引用可省略，缺失表示未设置，不取目录首项或复制 Chat 默认；非空模型引用须指向同快照内已启用模型，附件检查还要求 IMAGE 输入。可选 `imageGenerators` 缺失为空集合，已消费字段的显式 null、错型和无兜底的未知枚举仍拒绝；响应扩展按本节兼容规则忽略。Starter 的 v4/v5 条件和开场保全规则见下文。
 
 Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revision hash 再解码，不在正常读取时回退旧格式。历史 Starter 缺少 opening 时保留 null，不补造正文或重写 release/hash。`EnterpriseExecution.Platform.snapshotSchemaVersion` 持久保存下载时验证的版本；历史缺失为 null，不根据字段形状、Discovery 或客户端版本补造。
 
@@ -158,7 +192,9 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 
 `ConfigurationQueryService` 组合 `UserSettingsDocument`、原 Session 和 Applied；`ConfigurationResolver` 按完整 Deployment/User 产生 `ResolvedConfiguration`，只做纯派生，不落盘镜像。用户定义保持一份；企业助手定义、system prompt 与固定 MCP 只读，本域允许的模型和使用偏好通过 typed 命令写回用户文档。助手模型的默认、空间默认、指定引用必须保持可区分，失效的显式引用不能静默替换。所有列表、查询和命令携带原 `RealmSelection` 或 `RealmAccess`；等待 Settings、数据库、文件或网络后须重新验证原主体，切域返回也不恢复旧授权。
 
-资源选择和修改在 Settings 写锁内依据最新文档、原域与准入规则完成；UI 只消费有效目录和不可用原因，不从显示名称推断持久化引用。企业 `img_*` 是独立图片定义，仅由 resolver 投影到统一图片目录；模型、图片、云端语音和 Direct MCP 执行都须冻结原 Session、generation 与具体 route，并在 Provider I/O 前执行前述受管版本准入。准入成功不代表远端请求成功。
+资源选择和修改在 Settings 写锁内依据最新文档、原域与准入规则完成；UI 只消费有效目录和不可用原因，不从显示名称推断持久化引用。
+MCP 选择差量以本次写入前的持久偏好为基准，仅对真正新增的引用检查准入；显示投影过滤掉的历史企业引用不能阻断其他选择的编辑。
+保留历史引用不恢复执行资格，当前有效目录和原 Session 的调用准入仍须逐次检查。企业 `img_*` 是独立图片定义，仅由 resolver 投影到统一图片目录；模型、图片、云端语音和 Direct MCP 执行都须冻结原 Session、generation 与具体 route，并在 Provider I/O 前执行前述受管版本准入。准入成功不代表远端请求成功。
 
 `ModelExecutionService` 在用户配置事务中捕获同一文档的目录与选择，主聊天、子助手和辅助生成沿原域复验。内建搜索选择必须匹配 Provider wire 能力；外挂搜索以同次 `ResolvedConfiguration` 的 SEARCH 选择查用户目录，企业域未选或失效不回退首项。企业固定 Memory Seed 由 resolver 派生，START 捕获后经请求接纳进入 disclosure，不进入可变记忆表。
 
@@ -243,14 +279,14 @@ Model
 
 Starter 是企业发布的任务入口；`prompt` 是供用户编辑的起始输入，Opening 是会话绑定的开场定义副本。
 二者都不是运行记忆。Snapshot v4 的 Starter 只预填提示词；v5 要求 `openingSnapshot`，包含完整
-`systemPrompt` 和有序 `initialContexts(id,content)`。v5 尚未发布，只维护确定的一份结构；背景标题由界面按序生成，不作为配置字段。v5 Starter 无 `description`，领域模型、配置详情和入口选择器均不保存或展示说明。v4 由其生成 wire 类型严格验证后投影到当前运行模型，说明不进入投影；不得放宽 v5 的未知字段校验。已有磁盘配置与会话开场在校验原存储完整性后，仅在本地读取边界丢弃废弃的说明，不改写历史正文、来源或原始文件；新写入不再包含它。
-严格解析拒绝版本与字段不匹配、重复背景 ID；
+`systemPrompt` 和有序 `initialContexts(id,content)`。v5 开场只维护一份明确结构；背景标题由界面按序生成，不作为配置字段。v5 Starter 无 `description`，领域模型、配置详情和入口选择器均不保存或展示说明。v4 由其生成 wire 投影验证后转换到当前运行模型，废弃说明不进入 DTO；v4/v5 响应均忽略未知字段，不能用旧字段替代现行必填。已有磁盘配置与会话开场在校验原存储完整性后，仅在本地读取边界丢弃废弃的说明，不改写历史正文、来源或原始文件；新写入不再包含它。
+开场格式、已消费字段和重复背景 ID 仍校验；
 Android 保留发布值的空串、空白、顺序和字面内容，不把已发布的空 System 重新解释成“继承助手”。
 发布端如何编制默认值归 Core 合同；Android 消费 Core 导出的样例，不在客户端重新编译发布定义。
 
 | 阶段 | 当前行为与负责入口 |
 | --- | --- |
-| 浏览与导航 | 目录包含标题、描述、完整起始 prompt 与 opening 可用性；`StarterOpeningReference` 仅携带定义摘要与原发布身份，opening 的 System/背景正文经授权 query 按需读取 |
+| 浏览与导航 | 目录包含标题、完整起始 prompt 与 opening 可用性；`StarterOpeningReference` 仅携带定义摘要与原发布身份，opening 的 System/背景正文经授权 query 按需读取 |
 | Draft 选择 | `ConversationApplicationService` 经 `BindDraftOpening` 在内存绑定；selection token 比较并交换（CAS）防止迟到选择覆盖新选择，输入拒收只补偿本次 token |
 | 显式刷新 | 复验最新完整定义并更新绑定，不再次追加起始提示词；选择 v4 入口会清除已有 Draft opening |
 | 首次发送 | `requireCurrentStarterOpening` 比较助手、当前准入和完整 Starter 定义；单独 generation 改变不拒绝，定义变更/撤销则保留草稿与附件并报告原因 |

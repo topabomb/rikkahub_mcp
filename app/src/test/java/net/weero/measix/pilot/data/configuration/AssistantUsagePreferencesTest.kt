@@ -53,10 +53,19 @@ class AssistantUsagePreferencesTest {
         assertEquals(fixed.name, resolved.name)
         assertFalse(resolved.allowConversationSystemPrompt)
         assertTrue(resolved.enableWebSearch)
-        assertEquals(fixed.mcpServerIds.map { packet.identity.reference(it) }.toSet() + additionalMcp, resolved.mcpServers)
+        assertEquals(fixed.mcpBindings.map { it.mcpServerId }.map { packet.identity.reference(it) }.toSet() + additionalMcp, resolved.mcpServers)
         assertEquals(fixed.allowedSubAssistantIds.map { packet.identity.reference(it) }.toSet() + additionalChild, resolved.allowedSubAssistantIds)
         assertNull(resolveEnterpriseAssistantUsage(packet.identity, fixed, usage.copy(chatModelId = UsageValue(null))).chatModelId)
         assertThrows(IllegalArgumentException::class.java) { AssistantUsagePreferences(id, allowConversationSystemPrompt = UsageValue(true)) }
+    }
+
+    @Test fun `old managed extras cannot restore removed enterprise assistant bindings`() {
+        val packet = exampleEnterprisePackage()
+        val definition = packet.configuration.assistants.first()
+        val managed = packet.identity.reference(definition.mcpBindings.first().mcpServerId)
+        val user = ConfigurationReference.random()
+        val usage = AssistantUsagePreferences(packet.identity.reference(definition.id), mcpServers = UsageValue(setOf(managed, user)))
+        assertEquals(setOf(user), resolveEnterpriseAssistantUsage(packet.identity, definition.copy(mcpBindings = emptyList()), usage).mcpServers)
     }
 
     @Test

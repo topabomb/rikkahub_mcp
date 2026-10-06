@@ -140,6 +140,7 @@ data class McpAvailableTool(
     val needsApproval: Boolean,
     val namespace: String = serverName,
     val interactionId: String? = null,
+    val contractHash: String? = null,
 )
 
 data class TurnMcpCapabilitySnapshot(
@@ -158,6 +159,7 @@ enum class McpServerCapabilityState {
     UNAVAILABLE,
     AUTHORIZATION_REQUIRED,
     EMPTY_CATALOG,
+    TOOLS_RESTRICTED,
 }
 
 data class McpServerCapabilityOutcome(
@@ -181,8 +183,8 @@ sealed interface McpCatalogCommitResult {
 /**
  * Durable owner of validated remote MCP tool catalogs.
  *
- * Settings owns server definitions and user policy. This store owns only a complete non-empty
- * last-known-good remote catalog; a failed, partial or empty discovery never replaces it.
+ * Settings owns definitions and user policy. This store owns complete confirmed catalogs.
+ * Successful empty Direct MCP discovery replaces old tools; failed discovery retains the last catalog.
  */
 class McpCatalogStore internal constructor(
     private val dataStore: DataStore<Preferences>,
@@ -249,7 +251,7 @@ class McpCatalogStore internal constructor(
                 }
             }
             val headToken = (headTokens[candidate.key] ?: 0L) + 1L
-            if (normalizedTools.isEmpty()) {
+            if (normalizedTools.isEmpty() && !candidate.key.acceptsEmptyDirectory()) {
                 headTokens[candidate.key] = headToken
                 return@commit McpCatalogCommitResult.RejectedEmpty(
                     current[candidate.key]?.takeIf { it.definitionDigest == candidate.definitionDigest }
@@ -463,7 +465,7 @@ internal fun McpCatalogSnapshot.validated(): McpCatalogSnapshot? {
     if (
         revision <= 0L ||
         definitionDigest.isBlank() ||
-        normalizedTools.isEmpty() ||
+        (normalizedTools.isEmpty() && !key.acceptsEmptyDirectory()) ||
         normalizedTools.any { it.name.isBlank() } ||
         normalizedTools.map { it.name }.toSet().size != normalizedTools.size
     ) {
@@ -518,3 +520,6 @@ internal fun decodePersonalMcpCatalogImport(encoded: String): List<McpCatalogSna
     require(snapshots.all { it.scope == ConfigurationScope.Personal }) { "Personal backup contains enterprise MCP catalogs" }
     return snapshots
 }
+
+private fun McpCatalogKey.acceptsEmptyDirectory(): Boolean =
+    serverId is ConfigurationReference.Enterprise && serverId.id.startsWith("mcp_")

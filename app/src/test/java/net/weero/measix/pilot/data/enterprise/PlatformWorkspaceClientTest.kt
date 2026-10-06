@@ -163,14 +163,17 @@ class PlatformWorkspaceClientTest {
         } finally { server.stop(0) }
     }
 
-    @Test fun `files only and unprovisioned fixtures strictly decode`() {
+    @Test fun `workspace projections ignore extensions but validate known identity and state fields`() {
         for (name in listOf("projection-files-only.json", "projection-unprovisioned.json")) {
             val raw = javaClass.getResourceAsStream("/contracts/workspace/$name")!!.bufferedReader().use { it.readText() }
             val value = PlatformWireCodec.decode<PlatformWorkspaceProjection>(raw)
             assertFalse(value.mcpAvailable)
             val objectValue = Json.parseToJsonElement(raw).jsonObject
+            assertEquals(value, PlatformWireCodec.decode<PlatformWorkspaceProjection>(
+                JsonObject(objectValue + ("future" to JsonPrimitive(true))).toString(),
+            ))
             for (invalid in listOf(JsonObject(objectValue - "serviceState"), JsonObject(objectValue + ("agentSpaceId" to JsonNull)),
-                JsonObject(objectValue + ("future" to JsonPrimitive(true))), JsonObject(objectValue + ("state" to JsonPrimitive("FUTURE"))))) {
+                JsonObject(objectValue + ("state" to JsonPrimitive("FUTURE"))))) {
                 assertThrows(Exception::class.java) { PlatformWireCodec.decode<PlatformWorkspaceProjection>(invalid.toString()) }
             }
         }
@@ -201,7 +204,7 @@ class PlatformWorkspaceClientTest {
         val server = server {
             calls.incrementAndGet()
             assertTrue(requestURI.path.endsWith("/workspace"))
-            reply(200, JsonObject(current - "serviceState").toString())
+            reply(200, JsonObject((current - "serviceState") + ("future" to JsonPrimitive(true))).toString())
         }
         try {
             try { client.state(connection(server), "token"); fail("legacy capability accepted") }
@@ -236,7 +239,6 @@ class PlatformWorkspaceClientTest {
             JsonObject(legacy + ("agentSpaceId" to JsonNull)),
             JsonObject(legacy + ("agentSpaceId" to JsonPrimitive("not-a-space"))),
             JsonObject(legacy + ("schemaVersion" to JsonPrimitive(2))),
-            JsonObject(legacy + ("future" to JsonPrimitive(true))),
             JsonObject(current + ("serviceState" to JsonNull)),
         )) {
             val server = server { reply(200, invalid.toString()) }

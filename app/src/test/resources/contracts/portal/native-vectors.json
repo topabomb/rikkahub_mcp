@@ -393,5 +393,50 @@
         "message": "Unavailable"
       }
     }
+  },
+  {
+    "name": "response-extensions-and-unknown-capability",
+    "schema": "BridgeResponse",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "requestId": "r",
+      "result": {
+        "managedReady": true,
+        "appliedManagedGeneration": 8,
+        "lastConfigurationSync": "2030-01-01T00:00:00Z",
+        "capabilities": [
+          "getStatus",
+          "refresh",
+          "close",
+          "logout",
+          "openExternal",
+          "capturePhoto",
+          "recordAudio",
+          "readMedia",
+          "releaseMedia",
+          "cancel",
+          "futureMethod"
+        ],
+        "futureDisplayHint": true
+      },
+      "documentId": "doc_fixture",
+      "futureDisplayHint": {}
+    }
+  },
+  {
+    "name": "unknown-error-code",
+    "schema": "BridgeResponse",
+    "valid": true,
+    "value": {
+      "bridgeVersion": 3,
+      "documentId": "doc_fixture",
+      "requestId": "r",
+      "error": {
+        "code": "future_failure",
+        "message": "Unavailable",
+        "futureDisplayHint": {}
+      }
+    }
   }
 ]

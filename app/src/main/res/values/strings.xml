@@ -827,7 +827,7 @@
   <string name="setting_mcp_page_name">Name</string>
   <string name="setting_mcp_page_name_desc">Display name for the MCP server</string>
   <string name="setting_mcp_page_name_placeholder">e.g.: My MCP Server</string>
-  <string name="setting_mcp_page_needs_approval">Needs Approval</string>
+  <string name="setting_mcp_page_needs_approval">Confirm before calling</string>
   <string name="setting_mcp_page_no_mcp_servers_found">No MCP servers found</string>
   <string name="setting_mcp_page_save">Save</string>
   <string name="setting_mcp_page_server_url">Server URL</string>
@@ -1711,9 +1711,9 @@
   <string name="mcp_enterprise_definitions">Enterprise tools</string>
   <string name="mcp_gateway">Gateway</string>
   <string name="mcp_shared_definition_notice">Changes to these definitions apply wherever you use them.</string>
-  <string name="mcp_enterprise_read_only">Enterprise tools are read-only. Their catalog becomes available after first use.</string>
+  <string name="mcp_enterprise_read_only">Read only</string>
   <string name="mcp_gateway_preference_hint">All gateway tools switch together. Changes apply to new interactions.</string>
-  <string name="mcp_enterprise_required">Required by your enterprise</string>
+  <string name="mcp_enterprise_required">Required</string>
   <string name="speech_operation_unavailable">Speech is unavailable. Check the selected resource and space.</string>
   <string name="enterprise_selection_changed">The space changed. Select the configuration file again.</string>
   <string name="backup_personal_scope_notice">Back up your configuration and personal-space data. Enterprise configuration and data are excluded and preserved during restore.</string>
@@ -2123,4 +2123,18 @@
   <string name="file_large_plain_text">Large text: syntax highlighting is disabled.</string>
   <string name="chat_message_tool_inspect_assistant">Inspect assistant configuration</string>
   <string name="file_long_lines_no_wrap">Long lines: swipe horizontally to read.</string>
+  <string name="mcp_managed_all_tools">All server tools</string>
+  <string name="mcp_managed_approved_tools">Approved tools</string>
+  <string name="mcp_assistant_all_tools">All allowed tools</string>
+  <string name="mcp_assistant_selected_tools">Selected tools</string>
+  <string name="mcp_managed_empty_directory">No tools currently provided</string>
+  <string name="mcp_tool_not_allowed">Not enterprise-approved</string>
+  <string name="mcp_tool_not_selected">Not selected for this assistant</string>
+  <string name="mcp_tool_missing">Not provided by server; contact administrator</string>
+  <string name="mcp_tool_contract_changed">Definition changed; ask administrator to republish</string>
+  <string name="mcp_tool_directory_unavailable">Connects on first use</string>
+  <string name="mcp_assistant_fixed_binding">Fixed by assistant</string>
+  <string name="mcp_tools_partially_available">%1$d available · %2$d need administrator attention</string>
+  <string name="mcp_tools_count">%1$d tools</string>
+  <string name="modal_drag_handle">Drag handle</string>
 </resources>

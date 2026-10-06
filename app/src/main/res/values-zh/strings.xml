@@ -810,7 +810,7 @@
   <string name="setting_mcp_page_name">名称</string>
   <string name="setting_mcp_page_name_desc">MCP服务器的显示名称</string>
   <string name="setting_mcp_page_name_placeholder">例如：My MCP Server</string>
-  <string name="setting_mcp_page_needs_approval">需要审批</string>
+  <string name="setting_mcp_page_needs_approval">调用前确认</string>
   <string name="setting_mcp_page_no_mcp_servers_found">未找到 MCP 服务器</string>
   <string name="setting_mcp_page_save">保存</string>
   <string name="setting_mcp_page_server_url">服务器地址</string>
@@ -1721,9 +1721,9 @@
   <string name="mcp_enterprise_definitions">企业工具</string>
   <string name="mcp_gateway">网关</string>
   <string name="mcp_shared_definition_notice">修改这些定义会影响所有使用它们的空间。</string>
-  <string name="mcp_enterprise_read_only">企业工具只读，首次使用后可查看已发现的工具目录。</string>
+  <string name="mcp_enterprise_read_only">只读</string>
   <string name="mcp_gateway_preference_hint">所有网关工具一起启停，修改仅对新的交互生效。</string>
-  <string name="mcp_enterprise_required">企业要求启用</string>
+  <string name="mcp_enterprise_required">必须启用</string>
   <string name="speech_operation_unavailable">语音不可用，请检查所选资源和空间。</string>
   <string name="enterprise_selection_changed">空间已变化，请重新选择配置文件。</string>
   <string name="backup_personal_scope_notice">备份包含用户配置和个人空间的数据。不包含企业配置或数据，恢复时保留企业内容。</string>
@@ -2115,4 +2115,18 @@
   <string name="file_large_plain_text">文本较大，已关闭语法高亮。</string>
   <string name="chat_message_tool_inspect_assistant">查看助手配置</string>
   <string name="file_long_lines_no_wrap">内容包含超长行，可横向滑动阅读。</string>
+  <string name="mcp_managed_all_tools">服务器全部工具</string>
+  <string name="mcp_managed_approved_tools">已批准工具</string>
+  <string name="mcp_assistant_all_tools">全部授权工具</string>
+  <string name="mcp_assistant_selected_tools">指定工具</string>
+  <string name="mcp_managed_empty_directory">暂未提供工具</string>
+  <string name="mcp_tool_not_allowed">未获企业批准</string>
+  <string name="mcp_tool_not_selected">此助手未选择该工具</string>
+  <string name="mcp_tool_missing">服务器无此工具，请联系管理员</string>
+  <string name="mcp_tool_contract_changed">定义已变更，需管理员重新发布</string>
+  <string name="mcp_tool_directory_unavailable">首次使用时连接</string>
+  <string name="mcp_assistant_fixed_binding">助手固定</string>
+  <string name="mcp_tools_partially_available">%1$d 个可用 · %2$d 个需管理员处理</string>
+  <string name="mcp_tools_count">%1$d 个工具</string>
+  <string name="modal_drag_handle">拖动手柄</string>
 </resources>

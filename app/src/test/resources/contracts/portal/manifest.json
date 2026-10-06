@@ -3,15 +3,15 @@
   "artifacts": {
     "portal-contract.openapi.json": {
       "source": "api/portal/portal-contract.openapi.json",
-      "sha256": "6a7c7f854d9631fe0eab9cd3acb5ff2fcc215b3ef434c505830349b4c9e7b3d1"
+      "sha256": "6b7c86c58d38fbbc641eab87bf1035973b9cfe37ec244c91bed587c353bbe372"
     },
     "client-feed.schemas.json": {
       "source": "api/portal/client-feed.schemas.json",
-      "sha256": "a598358251a5f9d354ceccde65bb0f664dd29b704f231ac7e10132c04319fa9d"
+      "sha256": "d47d7df777d36078fb37138b559c1c4d2565fb1cec978c9b19eaa9ba1d6b414e"
     },
     "native-vectors.json": {
       "source": "api/fixtures/portal/native-vectors.json",
-      "sha256": "49007c35e2114e5dc98e7aa92ef1bbb79b62cc367799e01251921e3e6b331ab0"
+      "sha256": "79668fcdb9cc7b158afdbc8e4e81bcd96a6069928160b0867d49e512b7f2f85a"
     },
     "feed-vectors.json": {
       "source": "api/fixtures/portal/feed-vectors.json",

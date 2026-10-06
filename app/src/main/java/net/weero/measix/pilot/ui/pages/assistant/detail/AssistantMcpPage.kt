@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -42,7 +42,7 @@ fun AssistantMcpPage(id: String) {
 
     Scaffold(
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = {
                     Text(stringResource(R.string.assistant_page_tab_mcp))
                 },
@@ -65,7 +65,7 @@ fun AssistantMcpPage(id: String) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = innerPadding.calculateStartPadding(layoutDirection) + 16.dp,
-                top = innerPadding.calculateTopPadding(),
+                top = innerPadding.calculateTopPadding() + 8.dp,
                 end = innerPadding.calculateEndPadding(layoutDirection) + 16.dp,
                 bottom = innerPadding.calculateBottomPadding() + 16.dp,
             ),

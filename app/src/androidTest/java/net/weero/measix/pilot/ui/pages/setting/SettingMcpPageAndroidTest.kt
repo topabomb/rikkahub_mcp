@@ -32,9 +32,13 @@ import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.koin.compose.KoinIsolatedContext
+import org.koin.dsl.koinApplication
+import org.koin.dsl.module
 
 /** Actual settings consumer; policy persistence and original-selection rejection use the application tests. */
 @RunWith(AndroidJUnit4::class)
@@ -130,6 +134,53 @@ class SettingMcpPageAndroidTest {
         coVerify(exactly = 0) { commands.refreshAll() }
     }
 
+    @Test fun directToolRangesAndContractFailuresUseExistingReadOnlyCards() {
+        val authority = EnterpriseAuthority("deployment")
+        val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "original")
+        val selection = RealmSelection(access, 1)
+        val restricted = McpServerPresentation(ConfigurationReference.Enterprise(authority, "mcp_restricted"), "Reviewed service", true,
+            null, access, requiredEnabled = true, status = McpStatus.Ready(3, 1), sessionCallable = true,
+            tools = listOf(
+                McpToolPresentation("read", "Read tool details", JsonObject(emptyMap()), true, true),
+                McpToolPresentation("changed", null, JsonObject(emptyMap()), false, true, McpToolUnavailableReason.CONTRACT_CHANGED),
+            ), allowsAllTools = false, directoryConfirmed = true)
+        val all = restricted.copy(serverId = ConfigurationReference.Enterprise(authority, "mcp_all"), name = "Dynamic tools",
+            tools = emptyList(), allowsAllTools = true)
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(emptyList())
+        every { query.catalog } returns MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(selection,
+            McpCatalogReadState.Available(listOf(restricted, all))))
+        compose.setContent {
+            McpTestTheme {
+                CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                    LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup()))) {
+                    SettingMcpPage(mockk(), query, mockk())
+                }
+            }
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_managed_approved_tools)).performScrollTo().assertIsDisplayed()
+        val header = compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 2))
+        header.performScrollTo().assertHasClickAction()
+        val minimumTouch = 48f * compose.activity.resources.displayMetrics.density
+        assertTrue("Compact server header retains a 48dp touch target", header.fetchSemanticsNode().touchBoundsInRoot.height >= minimumTouch)
+        header.performClick()
+        val toolHeader = compose.onNodeWithContentDescription(compose.activity.getString(R.string.code_block_expand))
+        toolHeader.performScrollTo().assertHasClickAction()
+        assertTrue("Tool details header retains a 48dp touch target", toolHeader.fetchSemanticsNode().touchBoundsInRoot.height >= minimumTouch)
+        toolHeader.performClick()
+        compose.onNodeWithText("Read tool details").assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.code_block_collapse)).performClick()
+        compose.onNodeWithText("Read tool details").assertDoesNotExist()
+        compose.onNodeWithText("changed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_tool_contract_changed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_needs_approval)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("changed").onParent().onChildren()
+            .filter(hasText(compose.activity.getString(R.string.setting_mcp_page_needs_approval))).assertCountEquals(0)
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_managed_all_tools)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_managed_empty_directory)).performScrollTo().assertIsDisplayed()
+        compose.onAllNodes(isToggleable()).assertCountEquals(0)
+    }
+
     @Test
     fun managedToolsStayReadOnlyAndGatewayUsesTheRenderedSelectionBeforeLeavingTheRealm() {
         val authority = EnterpriseAuthority("deployment")
@@ -168,7 +219,7 @@ class SettingMcpPageAndroidTest {
                 }
             }
             compose.onNodeWithText("Enterprise profile").performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).performScrollTo().performClick()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).performScrollTo().performClick()
             compose.onNodeWithText("get_enterprise_profile").performScrollTo().assertIsDisplayed()
             compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_needs_approval)).assertDoesNotExist()
             compose.onAllNodes(isToggleable()).assertCountEquals(1)
@@ -208,17 +259,31 @@ class SettingMcpPageAndroidTest {
             }
         }
         val save = compose.activity.getString(R.string.setting_mcp_page_save)
-        compose.onNodeWithText(save).performClick()
+        fun waitForWindow() = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(200, 5_000)
+        fun submit() {
+            waitForWindow()
+            compose.onNodeWithText(save).performClick()
+        }
+        submit()
         compose.onNodeWithText("mcp_header_invalid_name", substring = true).assertIsDisplayed()
         org.junit.Assert.assertEquals(0, attempts.get())
         compose.onNodeWithText("Bad Name").performScrollTo().performTextReplacement("X-Key")
-        compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_add_header)).performScrollTo().performClick()
-        compose.onNodeWithText(save).performClick()
+        // Stabilize the IME insets before scrolling and injecting clicks into the form.
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.waitUntil(5_000) {
+            androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) != true
+        }
+        val addHeader = compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_add_header))
+        addHeader.performScrollTo()
+        waitForWindow()
+        addHeader.performClick()
+        submit()
         compose.onNodeWithText("disk write detail", substring = true).assertIsDisplayed()
         compose.onNodeWithText("original cause", substring = true).assertIsDisplayed()
         compose.onNodeWithText("X-Key").performScrollTo().assertIsDisplayed()
         org.junit.Assert.assertEquals(listOf("Authorization" to "Bearer test", "X-Key" to "  preserve  "), saved.get().commonOptions.headers)
-        compose.onNodeWithText(save).performClick()
+        submit()
         compose.waitUntil(5_000) { attempts.get() == 2 }
         compose.onNodeWithText(save).assertDoesNotExist()
     }
@@ -236,6 +301,43 @@ class SettingMcpPageAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_save)).performClick()
         compose.onNodeWithText("mcp_header_empty_name", substring = true).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_save)).assertIsDisplayed()
+    }
+
+    @Test
+    fun compactToolEditorKeepsChangesInTheDraftUntilSave() {
+        val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "my_tools"), url = "https://example.test/mcp")
+        val query = mockk<McpQueryService>()
+        every { query.observeUserServer(config.id) } returns kotlinx.coroutines.flow.flowOf(
+            McpServerPresentation(config.id, "Personal tools", true, config, status = McpStatus.Ready(1, 1),
+                sessionCallable = true, directoryConfirmed = true,
+                tools = listOf(McpToolPresentation("create_ticket", "Creates a ticket", JsonObject(emptyMap()), true, false)))
+        )
+        val isolated = koinApplication { modules(module { single { query } }) }
+        val saved = java.util.concurrent.atomic.AtomicReference<McpServerConfig>()
+        try {
+            compose.setContent {
+                KoinIsolatedContext(isolated) { McpTestTheme {
+                    val state = net.weero.measix.pilot.ui.hooks.useEditState<McpServerConfig> {}
+                    androidx.compose.runtime.LaunchedEffect(Unit) { state.open(config) }
+                    McpServerConfigModal(state) { saved.set(it) }
+                } }
+            }
+            compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_tools)).performClick()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.setting_mcp_page_needs_approval))
+                .assertIsOff().performClick().assertIsOn()
+            compose.onNodeWithContentDescription(compose.activity.getString(R.string.setting_mcp_page_enable))
+                .assertIsOn().performClick().assertIsOff()
+            val touchBounds = compose.onNodeWithContentDescription(compose.activity.getString(R.string.setting_mcp_page_enable))
+                .fetchSemanticsNode().touchBoundsInRoot
+            val minimumTarget = 48 * compose.activity.resources.displayMetrics.density
+            org.junit.Assert.assertTrue(touchBounds.width >= minimumTarget && touchBounds.height >= minimumTarget)
+            org.junit.Assert.assertNull(saved.get())
+            compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_save)).assertIsDisplayed().performClick()
+            compose.waitUntil(5_000) { saved.get() != null }
+            org.junit.Assert.assertEquals(config.id, saved.get().id)
+            org.junit.Assert.assertEquals(config.url, (saved.get() as McpServerConfig.StreamableHTTPServer).url)
+            org.junit.Assert.assertEquals(listOf(McpToolPolicy(name = "create_ticket", enable = false, needsApproval = true)), saved.get().commonOptions.toolPolicies)
+        } finally { isolated.close() }
     }
 
     @Test

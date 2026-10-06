@@ -210,7 +210,7 @@ class StarterSubmissionOwnershipAndroidTest {
             val execution = candidate.execution as EnterpriseExecution.Platform
             val session = EnterpriseSession(id, candidate.identity, expiry,
                 PlatformSessionDetails(execution.connection, "dev_${Uuid.random()}", credential))
-            appliedStore.commit(EnterpriseManifest(6, EnterpriseSessionPhase.READY, session, appliedStore.prepare(candidate),
+            appliedStore.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, appliedStore.prepare(candidate),
                 candidate.identity.scope, candidate.identity))
             sessions.recover()
             selection = requireNotNull(sessions.readPresentation().selection)

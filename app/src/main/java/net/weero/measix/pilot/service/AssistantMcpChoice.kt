@@ -16,24 +16,37 @@ internal data class AssistantMcpChoice(
     val sessionCallable: Boolean,
     val tools: List<McpToolPresentation>,
     val fixedByDefinition: Boolean = false,
+    val allowsAllTools: Boolean? = null,
+    val selectsAllTools: Boolean? = null,
+    val directoryConfirmed: Boolean = false,
 ) {
-    val hasCatalogTools: Boolean get() = tools.isNotEmpty()
+    val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
     val isCallable: Boolean get() = unavailableReason == null && sessionCallable && tools.any { it.enabled }
-    val isBusy: Boolean get() = !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
+    val isBusy: Boolean get() = !directoryConfirmed && !hasCatalogTools && (status == McpStatus.Connecting || status == McpStatus.Discovering)
 }
 
 internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServerPresentation>): List<AssistantMcpChoice> {
     val selected = assistant?.mcpServers.orEmpty()
     val definitions = resources.filter { it.key.category == ConfigurationCategory.MCP }.associateBy { it.key.reference }
-    return (definitions.keys + selected).map { id ->
+    return (definitions.keys + selected).filter { id ->
+        target.assistantId !is ConfigurationReference.Enterprise || id !is ConfigurationReference.Enterprise || id in fixedMcpBindings
+    }.map { id ->
         val definition = definitions[id]
         val reason = definition?.access?.unavailableReason
             ?: if (definition == null) ConfigurationUnavailableReason.REFERENCE_MISSING else null
         val status = runtime.singleOrNull { it.serverId == id && it.access == target.conversation.selection.access }
+        val names = fixedMcpToolSelections[id]
+        val tools = if (names == null) status?.tools.orEmpty() else names.map { name ->
+            status?.tools?.find { it.name == name }
+                ?: McpToolPresentation(name, null, null, false, false,
+                    if (status?.directoryConfirmed == true) net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason.MISSING
+                    else net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason.DIRECTORY_UNAVAILABLE)
+        }
         AssistantMcpChoice(id, definition?.name ?: id.toString(), id in selected,
             assistant != null && id !in fixedMcpBindings && (id in selected || reason == null), reason,
             status?.status ?: McpStatus.Idle, status?.sessionCallable == true,
-            status?.tools.orEmpty(), id in fixedMcpBindings)
+            tools, id in fixedMcpBindings, status?.allowsAllTools,
+            if (id in fixedMcpBindings) names == null else null, status?.directoryConfirmed == true)
     }
 }
 

@@ -25,9 +25,15 @@ internal fun UserSettingsDocument.changeAssistantPreference(
     requireSelectable(ConfigurationCategory.ASSISTANT, assistantId)
     val current = resolved.assistants[assistantId] ?: error("conversation_assistant_unavailable")
     val fixedMcp = (assistantId as? ConfigurationReference.Enterprise)?.let { reference ->
-        resolved.enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpServerIds
+        resolved.enterpriseConfiguration?.assistants?.singleOrNull { it.id == reference.id }?.mcpBindings?.map { it.mcpServerId }
             ?.mapTo(linkedSetOf()) { ConfigurationReference.Enterprise(reference.authority, it) }
     }.orEmpty()
+    fun requireMcpBinding(reference: ConfigurationReference) {
+        require(assistantId !is ConfigurationReference.Enterprise ||
+            reference !is ConfigurationReference.Enterprise || reference in fixedMcp) {
+            "enterprise_assistant_mcp_binding_missing"
+        }
+    }
     val definitionSubAssistants = resolved.inheritedSubAssistantIds[assistantId].orEmpty()
     when (change) {
         is AssistantPreferenceChange.EditUsage -> {
@@ -47,7 +53,10 @@ internal fun UserSettingsDocument.changeAssistantPreference(
             if (edited.tags != change.baseline.tags) {
                 require(edited.tags.all { selected -> configuration.assistantTags.any { it.id == selected } }) { "assistant_tag_missing" }
             }
-            (edited.mcpServers - change.baseline.mcpServers).forEach { requireSelectable(ConfigurationCategory.MCP, it) }
+            (edited.mcpServers - change.baseline.mcpServers).forEach {
+                requireMcpBinding(it)
+                requireSelectable(ConfigurationCategory.MCP, it)
+            }
             (edited.quickMessageIds - change.baseline.quickMessageIds).forEach { requireSelectable(ConfigurationCategory.QUICK_MESSAGE, it) }
             (edited.modeInjectionIds - change.baseline.modeInjectionIds).forEach { requireSelectable(ConfigurationCategory.PROMPT_INJECTION, it) }
         }
@@ -77,7 +86,10 @@ internal fun UserSettingsDocument.changeAssistantPreference(
                 require(change.enabled) { "enterprise_assistant_mcp_binding_is_fixed" }
                 return this
             }
-            if (change.enabled) requireSelectable(ConfigurationCategory.MCP, change.reference)
+            if (change.enabled) {
+                requireMcpBinding(change.reference)
+                requireSelectable(ConfigurationCategory.MCP, change.reference)
+            }
         }
         is AssistantPreferenceChange.QuickMessage -> if (change.enabled) requireSelectable(ConfigurationCategory.QUICK_MESSAGE, change.reference)
         is AssistantPreferenceChange.PromptInjection -> if (change.enabled) requireSelectable(ConfigurationCategory.PROMPT_INJECTION, change.reference)
@@ -98,7 +110,7 @@ internal fun UserSettingsDocument.changeAssistantPreference(
         is ConfigurationScope.Enterprise -> {
             val before = preferences.assistantUsage(scope, assistantId)
             val usageBase = if (assistantId is ConfigurationReference.Enterprise && change is AssistantPreferenceChange.Mcp) {
-                val fixedIds = resolved.enterpriseConfiguration?.assistants?.singleOrNull { it.id == assistantId.id }?.mcpServerIds.orEmpty()
+                val fixedIds = resolved.enterpriseConfiguration?.assistants?.singleOrNull { it.id == assistantId.id }?.mcpBindings?.map { it.mcpServerId }.orEmpty()
                 current.copy(mcpServers = before?.mcpServers?.value ?: current.mcpServers.filterNot {
                     it is ConfigurationReference.Enterprise && it.authority == assistantId.authority && it.id in fixedIds
                 }.toSet())

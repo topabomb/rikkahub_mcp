@@ -28,7 +28,9 @@ internal class McpRuntimeUsageTest : McpRuntimeCoordinatorTestBase() {
         val managed = McpConnectionDefinition.ManagedPlatform(access,
             me.rerere.common.configuration.ConfigurationReference.Enterprise(access.scope.authority, resource), "Managed",
             EnterpriseExecution.Platform(connection, "rel_${Uuid.random()}", "sha256:" + "a".repeat(64), mapOf(resource to "/mcp/v1")),
-            PlatformMcpDefinitionAuthOwnership.NONE, EnterpriseAppliedVersion(Uuid.random().toString(), 1, "config", "execution"), interaction) { "fixture-token" }
+            PlatformMcpDefinitionAuthOwnership.NONE, EnterpriseAppliedVersion(Uuid.random().toString(), 1, "config", "execution"), interaction,
+            EnterpriseMcpResource(resource, "Managed", authOwnership = PlatformMcpDefinitionAuthOwnership.NONE,
+                toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALL, allowedTools = emptyList())) { "fixture-token" }
         // Bind real server lifecycles to the coordinator; only the transport is controlled by the fixture.
         val states = McpRuntimeCoordinator::class.java.getDeclaredField("runtimeState").apply { isAccessible = true }
             .get(manager) as McpRuntimeStateStore

@@ -239,7 +239,8 @@ internal class McpServerRuntime(
     }
 
     private fun hydrateCatalogLocked(config: McpConnectionDefinition, catalog: McpCatalogSnapshot?) {
-        if (closing || catalog == null || catalog.definitionDigest != config.mcpDefinitionDigest()) return
+        if (closing || catalog == null || catalog.key != config.catalogKey ||
+            catalog.definitionDigest != config.mcpDefinitionDigest() || catalog.managed != config.managed) return
         val current = activeCatalog
         if (current != null && current.revision >= catalog.revision) return
         val restoredStatus = when (val health = status) {
@@ -619,12 +620,15 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
+        expectedContractHash: String? = null,
+        approvedByUser: Boolean = false,
     ): McpToolCallAdmission = withDefinition { current ->
         val rejection = invocationRejection(
             current,
             toolName,
             expectedDefinitionDigest,
             expectedNeedsApproval,
+            expectedContractHash, approvedByUser,
         )
         if (rejection != null) {
             return@withDefinition McpToolCallAdmission.Rejected(
@@ -641,12 +645,15 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
+        expectedContractHash: String? = null,
+        approvedByUser: Boolean = false,
     ): McpToolCallPreparation = withDefinition { current ->
         val rejection = invocationRejection(
             current,
             toolName,
             expectedDefinitionDigest,
             expectedNeedsApproval,
+            expectedContractHash, approvedByUser,
         )
         val serverName = current?.name ?: serverId.toString()
         if (rejection != null) {
@@ -755,6 +762,8 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
+        expectedContractHash: String?,
+        approvedByUser: Boolean,
     ): String? {
         if (closing || !stateStore.isCurrent(this)) return "TOOL_REVOKED: MCP runtime is closing"
         if (currentConfig == null) return "TOOL_REVOKED: MCP tool is no longer available"
@@ -766,6 +775,23 @@ internal class McpServerRuntime(
             (!expectedNeedsApproval && currentNeedsApproval)
         ) {
             return "TOOL_REVOKED: MCP tool is no longer available"
+        }
+        if (currentConfig is McpConnectionDefinition.ManagedPlatform) {
+            // Other interactions can refresh the same definition. Recheck its durable head while
+            // retaining the original directory when a different publication has replaced that head.
+            val catalog = catalogStore.catalogs.value[currentConfig.catalogKey]?.takeIf {
+                it.definitionDigest == expectedDefinitionDigest && it.managed == currentConfig.managed
+            } ?: activeCatalog?.takeIf {
+                it.key == currentConfig.catalogKey && it.definitionDigest == expectedDefinitionDigest && it.managed == currentConfig.managed
+            }
+                ?: return "TOOL_REVOKED: confirmed MCP directory is unavailable"
+            val permission = currentConfig.toolAccess(catalog.tools.filter { it.name == toolName }).find { it.name == toolName }
+                ?: return "TOOL_REVOKED: MCP tool was removed from the directory"
+            if (!permission.enabled || permission.contractHash != expectedContractHash ||
+                (!expectedNeedsApproval && permission.needsApproval) ||
+                (permission.needsApproval && !approvedByUser)) {
+                return "TOOL_REVOKED: ${permission.unavailableReason ?: "approval_or_contract_changed"}"
+            }
         }
         return null
     }
@@ -971,7 +997,7 @@ internal class McpServerRuntime(
         val liveClient = client
         val sessionCallable = !newStatus.blocksInvocation() && liveClient?.transport != null &&
             liveClient.serverCapabilities?.tools != null
-        // 只发布本 runtime 的键，避免全表重建把其他 server 的更新回退。
+        // Connection health belongs to this runtime; the store shares only confirmed managed directories.
         stateStore.publish(this@McpServerRuntime, McpRuntimeCapability(newStatus, catalog, sessionCallable))
     }
 

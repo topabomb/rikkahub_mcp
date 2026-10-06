@@ -2,7 +2,7 @@ package net.weero.measix.pilot.data.enterprise
 
 /**
  * Supported wire formats are an explicit set, not a min/max range or the app version.
- * Adding a version requires its generated contract, strict decoder, mapper and consumer tests.
+ * Adding a version requires its generated projection, decoder, mapper and consumer tests.
  * Snapshot compatibility gates configuration use; it never establishes or revokes identity.
  */
 internal object PlatformSnapshotCompatibility {

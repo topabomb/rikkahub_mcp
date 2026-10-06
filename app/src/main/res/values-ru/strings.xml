@@ -800,7 +800,7 @@
   <string name="setting_mcp_page_name">Имя</string>
   <string name="setting_mcp_page_name_desc">Отображаемое имя сервера MCP</string>
   <string name="setting_mcp_page_name_placeholder">например: Мой MCP-сервер</string>
-  <string name="setting_mcp_page_needs_approval">Требует подтверждения</string>
+  <string name="setting_mcp_page_needs_approval">Подтверждать вызов</string>
   <string name="setting_mcp_page_no_mcp_servers_found">Серверы MCP не найдены</string>
   <string name="setting_mcp_page_save">Сохранить</string>
   <string name="setting_mcp_page_server_url">URL сервера</string>
@@ -1721,9 +1721,9 @@
   <string name="mcp_enterprise_definitions">Корпоративные инструменты</string>
   <string name="mcp_gateway">Шлюз</string>
   <string name="mcp_shared_definition_notice">Изменения определений действуют во всех пространствах, где они используются.</string>
-  <string name="mcp_enterprise_read_only">Инструменты предприятия доступны только для чтения. Их каталог появится после первого использования.</string>
+  <string name="mcp_enterprise_read_only">Только чтение</string>
   <string name="mcp_gateway_preference_hint">Все инструменты шлюза включаются и отключаются вместе. Изменения действуют для новых взаимодействий.</string>
-  <string name="mcp_enterprise_required">Включение обязательно по правилам предприятия</string>
+  <string name="mcp_enterprise_required">Обязательно</string>
   <string name="speech_operation_unavailable">Речь недоступна. Проверьте выбранный ресурс и пространство.</string>
   <string name="enterprise_selection_changed">Пространство изменилось. Выберите файл конфигурации повторно.</string>
   <string name="backup_personal_scope_notice">Сохраняются пользовательские настройки и данные личного пространства. Конфигурация и данные организации не входят в копию и сохраняются при восстановлении.</string>
@@ -2115,4 +2115,18 @@
   <string name="file_large_plain_text">Большой текст: подсветка синтаксиса отключена.</string>
   <string name="chat_message_tool_inspect_assistant">Просмотр настроек ассистента</string>
   <string name="file_long_lines_no_wrap">Длинные строки: прокручивайте по горизонтали.</string>
+  <string name="mcp_managed_all_tools">Все инструменты сервера</string>
+  <string name="mcp_managed_approved_tools">Одобренные инструменты</string>
+  <string name="mcp_assistant_all_tools">Все разрешённые</string>
+  <string name="mcp_assistant_selected_tools">Выбранные инструменты</string>
+  <string name="mcp_managed_empty_directory">Сейчас нет инструментов</string>
+  <string name="mcp_tool_not_allowed">Не одобрен организацией</string>
+  <string name="mcp_tool_not_selected">Не выбран для этого ассистента</string>
+  <string name="mcp_tool_missing">Нет на сервере. Обратитесь к администратору</string>
+  <string name="mcp_tool_contract_changed">Определение изменилось. Нужна повторная публикация</string>
+  <string name="mcp_tool_directory_unavailable">Подключится при первом использовании</string>
+  <string name="mcp_assistant_fixed_binding">Закреплено ассистентом</string>
+  <string name="mcp_tools_partially_available">Доступно: %1$d · нужен администратор: %2$d</string>
+  <string name="mcp_tools_count">Инструментов: %1$d</string>
+  <string name="modal_drag_handle">Ручка перетаскивания</string>
 </resources>

@@ -31,7 +31,7 @@ class EnterpriseStarterPersistenceAndroidTest {
                 val execution = candidate.execution as EnterpriseExecution.Platform
                 val session = EnterpriseSession(sessionId, candidate.identity, credential.refreshExpiresAtMillis,
                     PlatformSessionDetails(execution.connection, id("dev"), credentialVersion))
-                var manifest = EnterpriseManifest(6, EnterpriseSessionPhase.READY, session, applied,
+                var manifest = EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, applied,
                     candidate.identity.scope, candidate.identity)
                 store.commit(manifest)
 
@@ -77,6 +77,65 @@ class EnterpriseStarterPersistenceAndroidTest {
                 check(root.deleteRecursively())
             }
         }
+    }
+
+    @Test
+    fun manifestSixMcpMigrationPublishesAtomicallyAndRetainsRealKeystoreCredentials() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = File(context.noBackupFilesDir, "mcp-migration-test-${Uuid.random()}").apply { check(mkdirs()) }
+        try {
+            val source = starterDeviceCandidate(historical = true)
+            val server = EnterpriseMcpResource(id("mcp"), "Managed", authOwnership = PlatformMcpDefinitionAuthOwnership.NONE,
+                toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALL, allowedTools = emptyList())
+            val binding = PlatformAssistantMcpBinding(server.id, PlatformAssistantMcpBindingToolSelection.ALL, emptyList())
+            val execution = source.execution as EnterpriseExecution.Platform
+            val candidate = source.copy(
+                configuration = source.configuration.copy(mcpServers = listOf(server),
+                    assistants = source.configuration.assistants.map { it.copy(mcpBindings = listOf(binding)) }),
+                execution = execution.copy(runtimePaths = execution.runtimePaths + (server.id to "/mcp/v1")),
+            )
+            val store = EnterpriseAppliedStore(root)
+            val applied = store.prepare(candidate)
+            val sessionId = id("ses")
+            val credential = PlatformRefreshCredential(sessionId, "migration-refresh", 1_900_000_000_000L)
+            val credentialVersion = store.prepareCredential(credential)
+            val session = EnterpriseSession(sessionId, candidate.identity, credential.refreshExpiresAtMillis,
+                PlatformSessionDetails(execution.connection, id("dev"), credentialVersion))
+            val current = EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, applied,
+                candidate.identity.scope, candidate.identity)
+            store.commit(current)
+            val json = EnterpriseConfigurationCodec.json
+            val configurationFile = File(root, "revisions/${applied.revision}/configuration.json")
+            val document = json.parseToJsonElement(configurationFile.readText()).jsonObject
+            val configuration = document.getValue("configuration").jsonObject
+            val old = JsonObject(configuration + mapOf(
+                "mcpServers" to JsonArray(configuration.getValue("mcpServers").jsonArray.map {
+                    JsonObject(it.jsonObject - "toolAccessMode" - "allowedTools")
+                }),
+                "assistants" to JsonArray(configuration.getValue("assistants").jsonArray.map {
+                    JsonObject((it.jsonObject - "mcpBindings") + ("mcpServerIds" to JsonArray(listOf(JsonPrimitive(server.id)))))
+                }),
+            ))
+            val oldBytes = JsonObject(document + ("configuration" to old)).toString().toByteArray()
+            configurationFile.writeBytes(oldBytes)
+            val historical = current.copy(schemaVersion = 6, applied = applied.copy(configurationHash = hash(oldBytes)))
+            val manifestFile = File(root, "manifest.json")
+            manifestFile.writeText(json.encodeToString(EnterpriseManifest.serializer(), historical))
+            val reopened = EnterpriseAppliedStore(root)
+            val state = reopened.load()
+            assertNull(state.configurationError)
+            assertEquals(ENTERPRISE_MANIFEST_SCHEMA_VERSION, state.manifest.schemaVersion)
+            assertEquals(historical.session, state.manifest.session)
+            assertEquals(historical.selectedScope, state.manifest.selectedScope)
+            assertNotEquals(applied.revision, state.manifest.applied!!.revision)
+            assertEquals(candidate.configuration, state.configuration)
+            assertEquals(candidate.execution, reopened.execution(state.manifest))
+            assertEquals(credential, reopened.credential(credentialVersion, sessionId))
+            assertArrayEquals(oldBytes, configurationFile.readBytes())
+            val publishedBytes = manifestFile.readBytes()
+            assertEquals(state, EnterpriseAppliedStore(root).load())
+            assertArrayEquals(publishedBytes, manifestFile.readBytes())
+        } finally { check(root.deleteRecursively()) }
     }
 
     private fun id(prefix: String) = "${prefix}_12345678-1234-4234-8234-123456789012"
