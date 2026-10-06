@@ -170,6 +170,11 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 
 生产用量、预算和阻断事实归 Core。`PlatformControlClient.budgets` 经原 Session 查询，Android 不持久化预算；`EnterpriseVM` 的投影绑定原 selection 与 origin，刷新中保留最近成功值，只有请求实际失败才标记 stale 并保留原诊断。MODEL、IMAGE_GENERATION、TTS、ASR、MCP 均按平台 Problem 精确分类；个人请求不能被普通远端 429 冒充企业额度失败。
 
+`EnterpriseBudgetAlerts` 只按 `EnterpriseBudgetAvailability.EXHAUSTED` 展示耗尽告警，不从历史限额占比重新推断。
+`projectEnterpriseBudget` 优先使用有效无限模式，其次区分缺少限制、核对中和有限额度占用；未处于核对中的有限零额度仍为耗尽。
+Core 在恢复无限额度后保留的规则和用量继续留在投影中，但 `EnterpriseBudgetCapabilityRow` 的无限状态只展示累计用量，
+不展示历史规则的进度、剩余量或恢复时间。加载和查询失败沿用原刷新、stale 与诊断语义，不改判为耗尽或无限。
+
 `runtimeCompleted` 仅由实际使用平台路由的模型、MCP、云端 TTS 和 ASR 调用触发，并保留原企业 access。
 企业空间中的个人 MCP、个人模型/语音和设备 System TTS 不触发企业额度刷新；该条件不改变新企业操作的配置及权限检查，
 也不取消企业页面打开或用户手动发起的预算查询。刷新信号和查询投影均归 Android，Core 用量统计与协议没有变化。

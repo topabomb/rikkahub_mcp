@@ -1315,7 +1315,7 @@ private fun EnterpriseUpdateRow(item: EnterpriseUpdateSummaryUiModel, timezone: 
 @Composable
 private fun EnterpriseBudgetAlerts(state: EnterpriseBudgetPresentation?, onOpenUsage: () -> Unit) {
     val exceeded = state?.value?.items?.filter {
-        it.availability == EnterpriseBudgetAvailability.EXHAUSTED || (it.primaryLimit?.occupiedFraction ?: 0f) >= 1f
+        it.availability == EnterpriseBudgetAvailability.EXHAUSTED
     }.orEmpty()
     if (exceeded.isEmpty()) return
     EnterpriseSection(stringResource(R.string.enterprise_budget_alerts), trailingContent = {
@@ -1437,7 +1437,7 @@ private fun EnterpriseBudgetCapabilityRow(
                 style = MaterialTheme.typography.labelLarge,
             )
         }
-        item.primaryLimit?.let { limit ->
+        item.primaryLimit?.takeUnless { item.availability == EnterpriseBudgetAvailability.UNLIMITED }?.let { limit ->
             LinearProgressIndicator(
                 progress = { limit.occupiedFraction },
                 modifier = Modifier.fillMaxWidth(),

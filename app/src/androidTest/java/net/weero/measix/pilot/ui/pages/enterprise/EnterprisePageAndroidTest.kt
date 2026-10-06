@@ -57,6 +57,17 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.enterprise.RealmSwitchRequest
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapability
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetCapabilityView
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetLimitState
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetMode
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetPeriod
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetSource
+import net.weero.measix.pilot.data.enterprise.PlatformBudgetStatus
+import net.weero.measix.pilot.data.enterprise.PlatformMeterQuantity
+import net.weero.measix.pilot.data.enterprise.PlatformUsageCompleteness
+import net.weero.measix.pilot.data.enterprise.PlatformUsageMeter
+import net.weero.measix.pilot.data.enterprise.PlatformUserBudgetView
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.portal.PortalDocument
 import net.weero.measix.pilot.service.portal.PortalDestination
@@ -246,6 +257,62 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(text(R.string.copied)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_tts)).assertIsDisplayed()
+    }
+
+    @Test
+    fun zeroLimitRecoveryRemovesAlertAfterRefreshAndKeepsUnlimitedUsage() {
+        val fixture = Fixture(overview())
+        var budget = budgetWithZeroRequestLimit(PlatformBudgetMode.LIMITED, PlatformBudgetStatus.EXHAUSTED)
+        coEvery { fixture.service.budgets(any(), any()) } coAnswers { budget }
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_budget_alerts)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_exhausted)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+
+        budget = budgetWithZeroRequestLimit(PlatformBudgetMode.UNLIMITED, PlatformBudgetStatus.PENDING_RECONCILIATION)
+        compose.onNodeWithContentDescription(text(R.string.enterprise_budget_refresh)).performClick()
+        compose.waitUntil(5_000) { fixture.vm.budgets.value?.value == budget && fixture.vm.budgets.value?.loading == false }
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_alerts)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertDoesNotExist()
+
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+        compose.onAllNodesWithText(text(R.string.enterprise_budget_unlimited))[0].assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.enterprise_budget_usage_recorded,
+            text(R.string.enterprise_budget_meter_requests), "3")).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.enterprise_budget_remaining, "0"),
+            substring = true).assertDoesNotExist()
+        capturePage("enterprise-unlimited-after-zero-limit.png")
+    }
+
+    @Test
+    fun reconcilingFullLimitDoesNotAppearAsExhaustedAlert() {
+        val fixture = Fixture(overview())
+        coEvery { fixture.service.budgets(any(), any()) } returns
+            budgetWithZeroRequestLimit(PlatformBudgetMode.LIMITED, PlatformBudgetStatus.PENDING_RECONCILIATION)
+        fixture.show()
+        compose.waitUntil(5_000) { fixture.vm.budgets.value?.value != null }
+        compose.onNodeWithText(text(R.string.enterprise_budget_alerts)).assertDoesNotExist()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_pending)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_reconciliation_notice)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_exhausted)).assertDoesNotExist()
+    }
+
+    @Test
+    fun failedBudgetQueryDoesNotInventAnExhaustedAlert() {
+        val fixture = Fixture(overview())
+        coEvery { fixture.service.budgets(any(), any()) } throws java.io.IOException("budget query unavailable")
+        fixture.show()
+        compose.waitUntil(5_000) { fixture.vm.budgets.value?.failure != null }
+        compose.onNodeWithText(text(R.string.enterprise_budget_alerts)).assertDoesNotExist()
+        compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
+        compose.onNodeWithText(text(R.string.enterprise_failure)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_budget_exhausted)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_budget_unlimited)).assertDoesNotExist()
     }
 
     @Test
@@ -987,6 +1054,36 @@ class EnterprisePageAndroidTest {
             )
         },
     )
+
+    private fun budgetWithZeroRequestLimit(mode: PlatformBudgetMode, status: PlatformBudgetStatus) =
+        projectEnterpriseBudget(PlatformUserBudgetView(
+            userId = "usr_123e4567-e89b-42d3-a456-426614174000",
+            timezone = "Asia/Shanghai",
+            asOf = "2026-10-06T07:04:48Z",
+            items = PlatformBudgetCapability.entries.map { capability ->
+                val isModel = capability == PlatformBudgetCapability.MODEL
+                PlatformBudgetCapabilityView(
+                    capability = capability,
+                    mode = if (isModel) mode else PlatformBudgetMode.UNLIMITED,
+                    source = PlatformBudgetSource.DEFAULT,
+                    revision = 2,
+                    effectiveFrom = "2026-10-06T07:04:48Z",
+                    asOf = "2026-10-06T07:04:48Z",
+                    inFlightRequests = 0,
+                    status = if (isModel) status else PlatformBudgetStatus.AVAILABLE,
+                    limits = if (isModel) listOf(PlatformBudgetLimitState(
+                        period = PlatformBudgetPeriod.DAY,
+                        meter = PlatformUsageMeter.REQUESTS,
+                        limit = "0", used = "0", reserved = "0", remaining = "0", overage = "0",
+                        scopeStart = "2026-10-06T07:03:17Z",
+                        resetAt = "2026-10-07T00:00:00Z",
+                    )) else emptyList(),
+                    usageMeters = if (isModel) listOf(PlatformMeterQuantity(
+                        PlatformUsageMeter.REQUESTS, "3", PlatformUsageCompleteness.EXACT,
+                    )) else emptyList(),
+                )
+            },
+        ))
 
     private inner class Fixture(
         initial: EnterpriseOverview,

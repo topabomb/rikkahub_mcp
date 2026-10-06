@@ -74,6 +74,55 @@ class EnterpriseBudgetProjectionTest {
     }
 
     @Test
+    fun `unlimited capability retains historical zero limit without becoming exhausted or reconciling`() {
+        val model = capability(
+            capability = PlatformBudgetCapability.MODEL,
+            limits = listOf(zeroRequestLimit()),
+            usageMeters = listOf(meter(PlatformUsageMeter.REQUESTS, "3")),
+            status = PlatformBudgetStatus.PENDING_RECONCILIATION,
+        )
+
+        val item = projectEnterpriseBudget(budget(model)).items
+            .single { it.capability == EnterpriseBudgetCapabilityKind.MODEL }
+
+        assertEquals(EnterpriseBudgetAvailability.UNLIMITED, item.availability)
+        assertEquals("0", item.primaryLimit!!.limit)
+        assertEquals(1f, item.primaryLimit!!.occupiedFraction, 0f)
+        assertEquals("3", item.usageSummary.single().quantity)
+    }
+
+    @Test
+    fun `limited zero request limit is exhausted even with no usage`() {
+        val model = capability(
+            capability = PlatformBudgetCapability.MODEL,
+            mode = PlatformBudgetMode.LIMITED,
+            limits = listOf(zeroRequestLimit()),
+        )
+
+        val item = projectEnterpriseBudget(budget(model)).items
+            .single { it.capability == EnterpriseBudgetCapabilityKind.MODEL }
+
+        assertEquals(EnterpriseBudgetAvailability.EXHAUSTED, item.availability)
+        assertEquals(1f, item.primaryLimit!!.occupiedFraction, 0f)
+    }
+
+    @Test
+    fun `limited pending reconciliation takes precedence over a full limit`() {
+        val model = capability(
+            capability = PlatformBudgetCapability.MODEL,
+            mode = PlatformBudgetMode.LIMITED,
+            limits = listOf(zeroRequestLimit()),
+            status = PlatformBudgetStatus.PENDING_RECONCILIATION,
+        )
+
+        val item = projectEnterpriseBudget(budget(model)).items
+            .single { it.capability == EnterpriseBudgetCapabilityKind.MODEL }
+
+        assertEquals(EnterpriseBudgetAvailability.RECONCILING, item.availability)
+        assertEquals(1f, item.primaryLimit!!.occupiedFraction, 0f)
+    }
+
+    @Test
     fun `limited capability without a limit is explicitly unavailable`() {
         val tts = capability(
             capability = PlatformBudgetCapability.TTS,
@@ -103,6 +152,7 @@ class EnterpriseBudgetProjectionTest {
         limits: List<PlatformBudgetLimitState> = emptyList(),
         usageMeters: List<PlatformMeterQuantity> = emptyList(),
         inFlightRequests: Long = 0,
+        status: PlatformBudgetStatus = PlatformBudgetStatus.AVAILABLE,
     ) = PlatformBudgetCapabilityView(
         capability = capability,
         mode = mode,
@@ -113,7 +163,16 @@ class EnterpriseBudgetProjectionTest {
         inFlightRequests = inFlightRequests,
         limits = limits,
         usageMeters = usageMeters,
-        status = PlatformBudgetStatus.AVAILABLE,
+        status = status,
+    )
+
+    private fun zeroRequestLimit() = limit(
+        period = PlatformBudgetPeriod.DAY,
+        meter = PlatformUsageMeter.REQUESTS,
+        limit = "0",
+        used = "0",
+        reserved = "0",
+        remaining = "0",
     )
 
     private fun limit(
