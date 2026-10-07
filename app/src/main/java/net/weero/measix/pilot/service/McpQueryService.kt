@@ -18,6 +18,8 @@ import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogCapability
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogRefresh
+import net.weero.measix.pilot.data.ai.mcp.McpNotificationHealth
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason
 import net.weero.measix.pilot.data.ai.mcp.toolAccess
@@ -66,6 +68,8 @@ internal data class McpServerPresentation(
     val directoryConfirmed: Boolean = false,
     val connectionsPartiallyReady: Boolean = false,
     val connectionDiagnostic: String? = null,
+    val catalogRefresh: McpCatalogRefresh = McpCatalogRefresh.Idle,
+    val notifications: McpNotificationHealth = McpNotificationHealth.NotEstablished,
 ) {
     val scope: ConfigurationScope get() = access.scope
     val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
@@ -166,9 +170,13 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
                 .thenBy { it.status.toString() },
         )
         val capability = McpRuntimeCapability(representative?.status ?: McpStatus.Idle,
-            resourceCapability?.catalog, callable.isNotEmpty())
+            resourceCapability?.catalog, callable.isNotEmpty(),
+            connections.map { it.catalogRefresh }.filterIsInstance<McpCatalogRefresh.Failed>().firstOrNull()
+                ?: representative?.catalogRefresh ?: McpCatalogRefresh.Idle,
+            connections.map { it.notifications }.filterIsInstance<McpNotificationHealth.Unavailable>().firstOrNull()
+                ?: representative?.notifications ?: McpNotificationHealth.NotEstablished)
         val partiallyReady = callable.isNotEmpty() && callable.size < connections.size
-        val diagnostic = connections.mapNotNull { (it.status as? McpStatus.Error)?.let { error -> error.detail ?: error.message } }
+        val diagnostic = connections.mapNotNull { it.diagnostic() }
             .distinct().sorted().takeIf { it.isNotEmpty() }?.joinToString("\n\n")
         val managed = configuration.enterpriseConfiguration?.mcpServers?.find {
             it.id == (resource.key.reference as? ConfigurationReference.Enterprise)?.id
@@ -177,6 +185,7 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
         if (user != null) user.toPresentation(capability).copy(
             access = access, unavailableReason = resource.access.unavailableReason,
             connectionsPartiallyReady = partiallyReady, connectionDiagnostic = diagnostic,
+            catalogRefresh = capability.catalogRefresh, notifications = capability.notifications,
         ) else McpServerPresentation(
             serverId = resource.key.reference, name = resource.name,
             enabled = resource.gatewayEnablement?.enabled ?: (resource.access.unavailableReason != ConfigurationUnavailableReason.RESOURCE_DISABLED),
@@ -193,15 +202,15 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
             allowsAllTools = managed?.let { it.toolAccessMode == PlatformMcpDefinitionToolAccessMode.ALL },
             directoryConfirmed = capability.catalog != null,
             connectionsPartiallyReady = partiallyReady, connectionDiagnostic = diagnostic,
+            catalogRefresh = capability.catalogRefresh, notifications = capability.notifications,
         )
     }
 }
 
 private fun connectionStatusPriority(connection: McpRuntimeCapability): Int = when (connection.status) {
     is McpStatus.Ready -> if (connection.sessionCallable) 0 else 8
-    is McpStatus.CatalogStale -> if (connection.sessionCallable) 1 else 7
     McpStatus.NeedsAuthorization -> 2
-    is McpStatus.Error, McpStatus.CatalogRejectedEmpty -> 3
+    is McpStatus.Error -> 3
     McpStatus.Authorizing -> 4
     McpStatus.Connecting, McpStatus.Discovering, is McpStatus.Reconnecting -> 5
     is McpStatus.RetryScheduled -> 6
@@ -219,7 +228,7 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         it.definitionDigest == mcpDefinitionDigest()
     }
     val presentedStatus = if (
-        activeCatalog == null && (status is McpStatus.Ready || status is McpStatus.CatalogStale)
+        catalog != null && activeCatalog == null && status is McpStatus.Ready
     ) {
         McpStatus.Error("MCP catalog identity is inconsistent; refresh required")
     } else {
@@ -233,6 +242,8 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         status = presentedStatus,
         sessionCallable = runtime.sessionCallable && activeCatalog != null,
         directoryConfirmed = activeCatalog != null,
+        catalogRefresh = runtime.catalogRefresh, notifications = runtime.notifications,
+        connectionDiagnostic = runtime.diagnostic(),
         tools = activeCatalog?.tools.orEmpty().map { descriptor ->
             val policy = policies[descriptor.name]
             McpToolPresentation(
@@ -245,3 +256,9 @@ internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(
         },
     )
 }
+
+private fun McpRuntimeCapability.diagnostic(): String? = listOfNotNull(
+    status as? McpStatus.Error,
+    (catalogRefresh as? McpCatalogRefresh.Failed)?.error,
+    (notifications as? McpNotificationHealth.Unavailable)?.error,
+).mapNotNull { it.detail ?: it.message }.distinct().takeIf { it.isNotEmpty() }?.joinToString("\n\n")

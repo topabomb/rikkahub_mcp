@@ -73,6 +73,7 @@ internal enum class ModelReadiness {
 }
 
 internal enum class McpReadiness {
+    ON_DEMAND,
     FAILED,
     NOT_CONFIGURED,
     ALL_DISABLED,
@@ -171,6 +172,7 @@ internal fun Settings.buildConversationReadiness(
         readyMcpCount == 0 && selectedStatuses.any {
             it == McpStatus.Connecting || it == McpStatus.Discovering
         } -> McpReadiness.CONNECTING
+        readyMcpCount == 0 && selectedStatuses.all { it == McpStatus.Idle } -> McpReadiness.ON_DEMAND
         readyMcpCount == 0 -> McpReadiness.UNAVAILABLE
         else -> McpReadiness.READY
     }
@@ -307,6 +309,7 @@ private fun PersonalReadinessRows(
         icon = HugeIcons.McpServer,
         label = stringResource(R.string.chat_readiness_mcp_title),
         status = when (readiness.mcpState) {
+            McpReadiness.ON_DEMAND -> stringResource(R.string.mcp_readiness_on_demand, readiness.selectedMcpCount)
             McpReadiness.FAILED -> stringResource(R.string.chat_readiness_read_failed)
             McpReadiness.NOT_CONFIGURED -> stringResource(R.string.chat_readiness_mcp_not_configured)
             McpReadiness.ALL_DISABLED -> stringResource(R.string.chat_readiness_mcp_all_disabled)

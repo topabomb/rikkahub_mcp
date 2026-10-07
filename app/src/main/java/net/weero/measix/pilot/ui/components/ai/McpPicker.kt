@@ -46,6 +46,8 @@ import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.Settings03
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogRefresh
+import net.weero.measix.pilot.data.ai.mcp.McpNotificationHealth
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.service.AssistantMcpChoice
@@ -233,6 +235,7 @@ internal fun McpPicker(
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             }
                             is McpStatus.Ready -> Icon(when {
+                                server.notifications is McpNotificationHealth.Unavailable || server.catalogRefresh is McpCatalogRefresh.Failed -> HugeIcons.Alert01
                                 server.connectionsPartiallyReady -> HugeIcons.Clock02
                                 !server.sessionCallable -> HugeIcons.Unlink01
                                 else -> HugeIcons.McpServer
@@ -242,9 +245,8 @@ internal fun McpPicker(
                             } else {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             }
-                            is McpStatus.RetryScheduled, McpStatus.WaitingNetwork,
-                            is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
-                            McpStatus.CatalogRejectedEmpty, is McpStatus.Error,
+                            is McpStatus.RetryScheduled, McpStatus.WaitingNetwork -> Icon(HugeIcons.Clock02, null)
+                            is McpStatus.Error,
                             McpStatus.NeedsAuthorization -> Icon(HugeIcons.Alert01, null)
                             McpStatus.Authorizing -> if (server.hasCatalogTools || server.directoryConfirmed) {
                                 Icon(HugeIcons.Clock02, null)
@@ -276,12 +278,12 @@ internal fun McpPicker(
                             modifier = Modifier.weight(1f),
                             text = server.unavailableReason?.let { configurationUnavailableText(it) }
                                 ?: mcpServerStatusText(status, server.tools, server.directoryConfirmed, server.sessionCallable,
-                                    server.connectionsPartiallyReady),
+                                    server.connectionsPartiallyReady, server.catalogRefresh, server.notifications),
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = if (status is McpStatus.Error && server.unavailableReason == null) 3 else Int.MAX_VALUE,
                             overflow = TextOverflow.Ellipsis,
                             color = if (server.unavailableReason != null || status is McpStatus.Error ||
-                                status == McpStatus.NeedsAuthorization || status == McpStatus.CatalogRejectedEmpty ||
+                                status == McpStatus.NeedsAuthorization || server.catalogRefresh == McpCatalogRefresh.RejectedEmpty ||
                                 (status is McpStatus.Ready && server.sessionCallable && server.tools.any { it.unavailableReason != null } &&
                                     server.tools.none { it.enabled })) {
                                 MaterialTheme.colorScheme.error
@@ -299,7 +301,7 @@ internal fun McpPicker(
                             }
                         }
                     }
-                    if ((status !is McpStatus.Ready || server.connectionsPartiallyReady) && server.directoryConfirmed) {
+                    if ((status !is McpStatus.Ready || server.connectionsPartiallyReady || server.notifications is McpNotificationHealth.Unavailable || server.catalogRefresh != McpCatalogRefresh.Idle) && server.directoryConfirmed) {
                         Text(
                             if (server.tools.isEmpty()) stringResource(R.string.mcp_managed_empty_directory)
                             else stringResource(R.string.mcp_enabled_tools_count, server.tools.count { it.enabled }, server.tools.size),
@@ -333,35 +335,44 @@ internal fun mcpServerStatusText(
     directoryConfirmed: Boolean,
     sessionCallable: Boolean,
     connectionsPartiallyReady: Boolean = false,
-): String = if (connectionsPartiallyReady) stringResource(R.string.mcp_status_partially_connected) else when (status) {
-    McpStatus.Idle -> stringResource(
-        if (!directoryConfirmed && tools.none { it.inputSchema != null }) R.string.mcp_tool_directory_unavailable
-        else R.string.mcp_status_idle,
-    )
-    McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
-    McpStatus.Discovering -> stringResource(R.string.mcp_status_discovering)
-    is McpStatus.Ready -> when {
-        directoryConfirmed && tools.isEmpty() -> stringResource(R.string.mcp_managed_empty_directory)
-        !sessionCallable -> stringResource(R.string.mcp_enabled_tools_count, tools.count { it.enabled }, tools.size)
-        tools.any { it.unavailableReason != null } -> stringResource(
-            R.string.mcp_tools_partially_available,
-            tools.count { it.enabled },
-            tools.count { it.unavailableReason != null },
-        )
-        else -> stringResource(R.string.mcp_status_ready, tools.count { it.enabled })
+    catalogRefresh: McpCatalogRefresh = McpCatalogRefresh.Idle,
+    notifications: McpNotificationHealth = McpNotificationHealth.NotEstablished,
+): String = when {
+    status is McpStatus.Ready && notifications is McpNotificationHealth.Unavailable ->
+        stringResource(R.string.mcp_notification_unavailable)
+    status is McpStatus.Ready && catalogRefresh is McpCatalogRefresh.Failed ->
+        if (directoryConfirmed) stringResource(R.string.mcp_catalog_refresh_failed)
+        else catalogRefresh.error.message ?: stringResource(R.string.error_title_operation)
+    status is McpStatus.Ready && catalogRefresh == McpCatalogRefresh.RejectedEmpty ->
+        stringResource(R.string.mcp_status_catalog_rejected_empty)
+    status is McpStatus.Ready && catalogRefresh == McpCatalogRefresh.Refreshing ->
+        stringResource(R.string.mcp_catalog_refreshing)
+    else -> if (connectionsPartiallyReady) stringResource(R.string.mcp_status_partially_connected) else when (status) {
+        McpStatus.Idle -> if (directoryConfirmed) stringResource(R.string.mcp_catalog_saved, tools.size)
+            else stringResource(R.string.mcp_status_on_demand)
+        McpStatus.Connecting -> stringResource(R.string.mcp_status_connecting)
+        McpStatus.Discovering -> stringResource(R.string.mcp_status_discovering)
+        is McpStatus.Ready -> when {
+            directoryConfirmed && tools.isEmpty() -> stringResource(R.string.mcp_managed_empty_directory)
+            !sessionCallable -> stringResource(R.string.mcp_enabled_tools_count, tools.count { it.enabled }, tools.size)
+            tools.any { it.unavailableReason != null } -> stringResource(
+                R.string.mcp_tools_partially_available,
+                tools.count { it.enabled },
+                tools.count { it.unavailableReason != null },
+            )
+            else -> stringResource(R.string.mcp_status_ready, tools.count { it.enabled })
+        }
+        is McpStatus.Reconnecting -> if (status.maintenance) stringResource(R.string.mcp_status_maintenance_reconnecting)
+            else stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
+        is McpStatus.RetryScheduled -> if (status.maintenance) {
+            stringResource(R.string.mcp_status_maintenance_retry, (status.retryInMs / 1000).toInt())
+        } else stringResource(R.string.mcp_status_retry_scheduled, status.attempt, status.maxAttempts, (status.retryInMs / 1000).toInt())
+        McpStatus.WaitingNetwork -> stringResource(R.string.mcp_status_waiting_network)
+        is McpStatus.Error -> status.message?.let { stringResource(R.string.mcp_status_error, it) }
+            ?: stringResource(R.string.error_title_operation)
+        McpStatus.NeedsAuthorization -> stringResource(R.string.mcp_status_needs_authorization)
+        McpStatus.Authorizing -> stringResource(R.string.mcp_status_authorizing)
     }
-    is McpStatus.Reconnecting -> if (status.maintenance) stringResource(R.string.mcp_status_maintenance_reconnecting)
-        else stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
-    is McpStatus.RetryScheduled -> if (status.maintenance) {
-        stringResource(R.string.mcp_status_maintenance_retry, (status.retryInMs / 1000).toInt())
-    } else stringResource(R.string.mcp_status_retry_scheduled, status.attempt, status.maxAttempts, (status.retryInMs / 1000).toInt())
-    McpStatus.WaitingNetwork -> stringResource(R.string.mcp_status_waiting_network)
-    McpStatus.CatalogRejectedEmpty -> stringResource(R.string.mcp_status_catalog_rejected_empty)
-    is McpStatus.CatalogStale -> stringResource(R.string.mcp_status_catalog_stale, status.lastKnownGoodCount)
-    is McpStatus.Error -> status.message?.let { stringResource(R.string.mcp_status_error, it) }
-        ?: stringResource(R.string.error_title_operation)
-    McpStatus.NeedsAuthorization -> stringResource(R.string.mcp_status_needs_authorization)
-    McpStatus.Authorizing -> stringResource(R.string.mcp_status_authorizing)
 }
 
 @Composable

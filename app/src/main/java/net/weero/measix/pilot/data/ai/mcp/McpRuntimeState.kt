@@ -18,11 +18,29 @@ data class McpRefreshReceipt(
     val continuingServerCount: Int = requestedServerCount - settledServerCount
 }
 
+/** Directory outcomes never replace connection or notification health. */
+sealed interface McpCatalogRefresh {
+    data object Idle : McpCatalogRefresh
+    data object Refreshing : McpCatalogRefresh
+    data object RejectedEmpty : McpCatalogRefresh
+    data class Failed(val error: McpStatus.Error) : McpCatalogRefresh
+}
+
+sealed interface McpNotificationHealth {
+    data object NotEstablished : McpNotificationHealth
+    data object Connecting : McpNotificationHealth
+    data object Listening : McpNotificationHealth
+    data object Unsupported : McpNotificationHealth
+    data class Unavailable(val error: McpStatus.Error, val retryable: Boolean) : McpNotificationHealth
+}
+
 /** Runtime projection published by the single-server lifecycle owner. */
 data class McpRuntimeCapability(
     val status: McpStatus,
     val catalog: McpCatalogSnapshot?,
     val sessionCallable: Boolean,
+    val catalogRefresh: McpCatalogRefresh = McpCatalogRefresh.Idle,
+    val notifications: McpNotificationHealth = McpNotificationHealth.NotEstablished,
 ) {
     companion object {
         val EMPTY = McpRuntimeCapability(McpStatus.Idle, null, false)
@@ -86,7 +104,6 @@ internal class McpRuntimeStateStore {
         catalog = snapshot,
         status = when (val health = status) {
             is McpStatus.Ready -> health.copy(toolCount = snapshot.tools.size, catalogRevision = snapshot.revision)
-            is McpStatus.CatalogStale -> health.copy(lastKnownGoodCount = snapshot.tools.size, catalogRevision = snapshot.revision)
             else -> health
         },
     )

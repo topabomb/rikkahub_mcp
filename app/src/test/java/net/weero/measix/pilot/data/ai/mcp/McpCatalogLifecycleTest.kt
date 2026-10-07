@@ -507,7 +507,7 @@ internal class McpCatalogLifecycleTest : McpRuntimeCoordinatorTestBase() {
         emit(listOf(serverConfig()))
         advanceUntilIdle()
 
-        assertEquals(McpStatus.CatalogRejectedEmpty, manager.syncingStatus.value[SERVER_ID])
+        assertEquals(McpCatalogRefresh.RejectedEmpty, manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]?.catalogRefresh)
         assertTrue(catalogs.value.isEmpty())
         assertTrue(manager.captureTurnCapabilities(Assistant(mcpServers = setOf(SERVER_ID))).tools.isEmpty())
     }

@@ -33,6 +33,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse
 import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.types.RequestId
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -55,7 +56,15 @@ private const val MCP_NAME_HEADER = "Mcp-Name"
 private const val MCP_BASE64_PREFIX = "=?base64?"
 private const val MCP_BASE64_SUFFIX = "?="
 
-internal class McpNotificationStreamExhausted : Exception("Maximum reconnection attempts exceeded")
+internal class McpNotificationStreamExhausted(cause: Throwable? = null) :
+    Exception("Maximum notification reconnection attempts exceeded", cause)
+
+internal sealed interface McpNotificationStreamState {
+    data object Starting : McpNotificationStreamState
+    data object Listening : McpNotificationStreamState
+    data object Unsupported : McpNotificationStreamState
+    data class Unavailable(val error: Throwable, val retryable: Boolean) : McpNotificationStreamState
+}
 
 /**
  * Default maximum size, in characters, of a single inline SSE event assembled from a POST response.
@@ -105,7 +114,58 @@ internal class McpStreamableHttpTransport(
     /** MCP protocol version negotiated with the server, or `null` before connection. */
     @Volatile private var protocolVersion: String? = null
 
-    private var sseJob: Job? = null
+    private val notificationLock = Any()
+    private var notificationJob: Job? = null
+    private var notificationCursor: String? = null
+    @Volatile private var notificationState: McpNotificationStreamState = McpNotificationStreamState.Starting
+    @Volatile private var notificationStateListener: (McpNotificationStreamState) -> Unit = {}
+
+    fun onNotificationState(listener: (McpNotificationStreamState) -> Unit) {
+        notificationStateListener = listener
+        listener(notificationState)
+    }
+
+    /** Restarts only the optional notification GET; in-flight command/recovery requests remain owned separately. */
+    suspend fun resumeNotificationStream() {
+        // A terminal-state callback can wake its consumer before the collector has returned.
+        // Await that collector rather than losing the user's recovery request in this small window.
+        val finishing = synchronized(notificationLock) {
+            notificationJob?.takeIf {
+                !it.isCompleted && notificationState is McpNotificationStreamState.Unavailable
+            }
+        }
+        finishing?.join()
+        val job = synchronized(notificationLock) {
+            if (notificationJob?.isCompleted == false || notificationState == McpNotificationStreamState.Unsupported) return
+            transportScope.launch(CoroutineName("McpNotifications#${hashCode()}"), start = CoroutineStart.LAZY) {
+                publishNotificationState(McpNotificationStreamState.Starting)
+                try {
+                    collectSseSessions(
+                        resumptionToken = notificationCursor,
+                        onResumptionToken = { notificationCursor = it },
+                        onConnected = { publishNotificationState(McpNotificationStreamState.Listening) },
+                    )
+                    publishNotificationState(McpNotificationStreamState.Unsupported)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    publishNotificationState(McpNotificationStreamState.Unavailable(error,
+                        error is McpNotificationStreamExhausted || isRetryableStreamError(error)))
+                    // Authorization and managed barriers invalidate the whole execution identity.
+                    // Ordinary notification failures leave the POST command channel usable.
+                    if (error is ManagedSnapshotRequired ||
+                        net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException.find(error) != null ||
+                        McpProtocolFailureClassifier.isUnauthorized(error)) _onError(error)
+                }
+            }.also { notificationJob = it }
+        }
+        job.start()
+    }
+
+    private fun publishNotificationState(state: McpNotificationStreamState) {
+        notificationState = state
+        notificationStateListener(state)
+    }
 
 
     /** Result of an SSE stream collection. Reconnect when [hasPrimingEvent] is true and [receivedResponse] is false. */
@@ -130,7 +190,7 @@ internal class McpStreamableHttpTransport(
 
         // If we have a resumption token, reconnect the SSE stream with it
         options?.resumptionToken?.let { token ->
-            startSseSession(
+            collectSseSessions(
                 resumptionToken = token,
                 onResumptionToken = options.onResumptionToken,
                 replayMessageId = if (message is JSONRPCRequest) message.id else null,
@@ -156,7 +216,7 @@ internal class McpStreamableHttpTransport(
 
             if (response.status == HttpStatusCode.Accepted) {
                 if (message is JSONRPCNotification && message.method == "notifications/initialized") {
-                    startSseSession(onResumptionToken = options?.onResumptionToken)
+                    resumeNotificationStream()
                 }
                 return@execute
             }
@@ -182,7 +242,7 @@ internal class McpStreamableHttpTransport(
                     val replayMessageId = if (message is JSONRPCRequest) message.id else null
                     val result = readSseResponse(response, replayMessageId, options?.onResumptionToken)
                     if (result.hasPrimingEvent && !result.receivedResponse) {
-                        startSseSession(
+                        collectSseSessions(
                             resumptionToken = result.lastEventId,
                             replayMessageId = replayMessageId,
                             onResumptionToken = options?.onResumptionToken,
@@ -204,65 +264,53 @@ internal class McpStreamableHttpTransport(
         }
     }
 
-    private fun startSseSession(
+    /** Request recovery runs in the send's owned IO task, so request cancellation also awaits its GET. */
+    private suspend fun collectSseSessions(
         resumptionToken: String? = null,
         replayMessageId: RequestId? = null,
         onResumptionToken: ((String) -> Unit)? = null,
         initialServerRetryDelay: Duration? = null,
+        onConnected: () -> Unit = {},
     ) {
-        // Cancel-and-replace: cancel() signals the previous job, join() inside
-        // the new coroutine ensures it completes before we start collecting.
-        // This is intentionally non-suspend to avoid blocking performSend.
-        val previousJob = sseJob
-        previousJob?.cancel()
-        sseJob = transportScope.launch(CoroutineName("StreamableHttpTransport.collect#${hashCode()}")) {
-            previousJob?.join()
-            var lastEventId = resumptionToken
-            var serverRetryDelay = initialServerRetryDelay
-            var attempt = 0
-            var needsDelay = initialServerRetryDelay != null
-
-            while (isActive) {
-                // Delay before (re)connection: skip only for first fresh SSE connection
-                if (needsDelay) {
-                    delay(getNextReconnectionDelay(attempt, serverRetryDelay))
+        var lastEventId = resumptionToken
+        var serverRetryDelay = initialServerRetryDelay
+        var attempt = 0
+        var needsDelay = initialServerRetryDelay != null
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            if (needsDelay) delay(getNextReconnectionDelay(attempt, serverRetryDelay))
+            needsDelay = true
+            var connected = false
+            val result = try {
+                readSseSession(
+                    lastEventId, replayMessageId,
+                    onResumptionToken = { id -> lastEventId = id; onResumptionToken?.invoke(id) },
+                    onRetry = { serverRetryDelay = it },
+                    onConnected = { connected = true; attempt = 0; onConnected() },
+                ) ?: return
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (!isRetryableStreamError(error)) throw error
+                if (!connected && ++attempt >= reconnectionOptions.maxRetries) {
+                    if (replayMessageId == null) throw McpNotificationStreamExhausted(error)
+                    throw java.io.IOException("Maximum request recovery attempts exceeded", error)
                 }
-                needsDelay = true
-
-                var connected = false
-                val result = try {
-                    readSseSession(
-                        lastEventId, replayMessageId,
-                        onResumptionToken = { id -> lastEventId = id; onResumptionToken?.invoke(id) },
-                        onRetry = { serverRetryDelay = it },
-                        onConnected = { connected = true; attempt = 0 },
-                    ) ?: return@launch
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    val retryable = (error is java.io.IOException &&
-                        error !is net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException &&
-                        error !is io.modelcontextprotocol.kotlin.sdk.shared.TooLongFrameException &&
-                        error !is java.nio.charset.CharacterCodingException) ||
-                        (error is StreamableHttpError &&
-                            (error.code == 408 || error.code == 429 || (error.code ?: 0) >= 500))
-                    if (!retryable) {
-                        _onError(error)
-                        return@launch
-                    }
-                    if (!connected && ++attempt >= reconnectionOptions.maxRetries) {
-                        _onError(McpNotificationStreamExhausted())
-                        return@launch
-                    }
-                    continue
-                }
-                attempt = 0
-                lastEventId = result.lastEventId ?: lastEventId
-                serverRetryDelay = result.serverRetryDelay ?: serverRetryDelay
-                if (result.receivedResponse) break
+                continue
             }
+            attempt = 0
+            lastEventId = result.lastEventId ?: lastEventId
+            serverRetryDelay = result.serverRetryDelay ?: serverRetryDelay
+            if (result.receivedResponse) return
         }
     }
+
+    private fun isRetryableStreamError(error: Throwable): Boolean =
+        (error is java.io.IOException &&
+            error !is net.weero.measix.pilot.data.enterprise.EnterpriseRuntimeProblemException &&
+            error !is TooLongFrameException &&
+            error !is java.nio.charset.CharacterCodingException) ||
+            (error is StreamableHttpError &&
+                (error.code == 408 || error.code == 429 || (error.code ?: 0) in 500..599))
 
     private suspend fun readSseSession(
         lastEventId: String?,
@@ -279,9 +327,10 @@ internal class McpStreamableHttpTransport(
             lastEventId?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
             requestBuilder()
         }.execute { response ->
-            if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed) return@execute null
+            if (replayMessageId == null &&
+                (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed)) return@execute null
             if (!response.status.isSuccess()) throw responseError(response.status.value, response.readMcpBody())
-            if (response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
+            if (replayMessageId == null && response.contentType()?.match(ContentType.Application.Json) == true) return@execute null
             if (response.contentType()?.match(ContentType.Text.EventStream) != true) {
                 throw StreamableHttpError(response.status.value, "MCP notification stream has unexpected Content-Type: ${response.contentType()}")
             }
@@ -388,7 +437,7 @@ internal class McpStreamableHttpTransport(
                         receivedResponse = isResponseFor(message, replayMessageId)
                         _onMessage(message)
                     }
-                    "error" -> _onError(StreamableHttpError(null, "MCP SSE error"))
+                    "error" -> throw StreamableHttpError(null, "MCP SSE error")
                 }
             }
             !receivedResponse

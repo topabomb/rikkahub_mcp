@@ -884,7 +884,6 @@
   <string name="setting_page_interaction_notification_settings">インタラクションと通知</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">MCPサーバーを設定</string>
-  <string name="mcp_status_idle">未接続</string>
   <string name="mcp_status_connecting">接続中</string>
   <string name="mcp_status_reconnecting">再接続中 (%1$d/%2$d)</string>
   <string name="mcp_status_maintenance_reconnecting">MCP サービスの復旧を確認しています</string>
@@ -897,7 +896,6 @@
   <string name="mcp_status_maintenance_retry">MCP サービスは一時的に利用できません。%1$d 秒後に再確認します</string>
   <string name="mcp_status_waiting_network">ネットワークを待機中</string>
   <string name="mcp_status_catalog_rejected_empty">サーバーがツールを返さなかったため、検証済みカタログは置き換えられませんでした</string>
-  <string name="mcp_status_catalog_stale">最後に検証されたカタログ（%1$d ツール）を使用中。更新に失敗しました</string>
   <string name="mcp_oauth_authorize">認証</string>
   <string name="mcp_oauth_authorizing_hint">認証中、ブラウザで完了してください…</string>
   <string name="mcp_oauth_cancel_authorization">認証をキャンセル</string>
@@ -2128,4 +2126,11 @@
   <string name="configuration_continue_edit">編集を続ける</string>
   <string name="search_shared_definition_notice">個人の検索サービスです。利用するスペースは同じ設定を共有します。</string>
   <string name="mcp_connection_details">詳細</string>
+  <string name="mcp_status_on_demand">使用時に接続</string>
+  <string name="mcp_catalog_saved">保存済みツール %1$d 件 · 使用時に接続</string>
+  <string name="mcp_notification_unavailable">ツール接続は利用可能ですが、自動更新は利用できません</string>
+  <string name="mcp_catalog_refresh_failed">更新に失敗しました。前回の一覧を保持しています</string>
+  <string name="mcp_catalog_refreshing">ツールを更新中。前回の一覧を保持しています</string>
+  <string name="mcp_refresh_personal">自分の MCP を更新</string>
+  <string name="mcp_readiness_on_demand">%1$d 件選択済み · 使用時に接続</string>
 </resources>

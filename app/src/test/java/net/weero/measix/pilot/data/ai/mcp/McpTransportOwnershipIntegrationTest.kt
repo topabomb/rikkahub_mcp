@@ -61,10 +61,16 @@ class McpTransportOwnershipIntegrationTest {
             try {
                 withTimeout(5_000) {
                     transport.start()
-                    transport.send(McpJson.decodeFromString<JSONRPCMessage>(if (primed)
-                        """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke_tool","arguments":{}}}"""
-                        else """{"jsonrpc":"2.0","method":"notifications/initialized"}"""), null)
-                    assertTrue(failure.await() is ManagedSnapshotRequired)
+                    val sendFailure = try {
+                        transport.send(McpJson.decodeFromString<JSONRPCMessage>(if (primed)
+                            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke_tool","arguments":{}}}"""
+                            else """{"jsonrpc":"2.0","method":"notifications/initialized"}"""), null)
+                        null
+                    } catch (error: io.modelcontextprotocol.kotlin.sdk.types.McpException) {
+                        assertTrue(error.cause is ManagedSnapshotRequired)
+                        error.cause
+                    }
+                    assertTrue((sendFailure ?: failure.await()) is ManagedSnapshotRequired)
                     transport.close()
                     assertEquals(1, gets.get())
                     assertEquals(1, posts.get())
@@ -138,7 +144,9 @@ class McpTransportOwnershipIntegrationTest {
         server.start()
         val http = HttpClient(OkHttp)
         val transport = McpStreamableHttpTransport(http, "http://127.0.0.1:${server.address.port}/mcp")
-        transport.onError { failure.complete(it) }
+        transport.onNotificationState { state ->
+            if (state is McpNotificationStreamState.Unavailable) failure.complete(state.error)
+        }
         try {
             withTimeout(5_000) {
                 transport.start()

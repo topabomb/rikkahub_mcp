@@ -37,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -208,8 +209,9 @@ class McpRuntimeCoordinator internal constructor(
                     configs.filter { current[it.id]?.enabled == true }
                         .forEach { config -> runtime(config.id).bootstrap() }
                 }
-                runtimeState.keys.filter { it.access == null }.map { it.serverId }.filter { current[it]?.enabled != true }
-                    .forEach { id -> runtime(id).deactivateIfDisabledOrRemoved() }
+                runtimeState.activeRuntimes
+                    .filter { it.key.serverId is ConfigurationReference.User && current[it.key.serverId]?.enabled != true }
+                    .forEach { target -> isolateLifecycleFailure(target) { target.deactivateIfDisabledOrRemoved() } }
                 // Disabled definitions may have no runtime; durable retention follows the definition.
                 (previous.orEmpty().keys - current.keys).forEach { id ->
                     settingsStore.withUserMcpDefinitions { latest ->
@@ -220,7 +222,13 @@ class McpRuntimeCoordinator internal constructor(
                 }
                 configs.filter { current[it.id]?.enabled == true }
                     .filter { config -> previous != null && previous?.get(config.id) != current[config.id] }
-                    .forEach { config -> runtime(config.id).reconcile(refreshTools = false) }
+                    .forEach { config ->
+                        // Borrowed enterprise connections retain their realm admission while
+                        // following the same user definition and credential owner.
+                        val targets = runtimeState.activeRuntimes.filter { it.key.serverId == config.id }
+                            .ifEmpty { listOf(runtime(config.id)) }
+                        targets.forEach { target -> isolateLifecycleFailure(target) { target.reconcile(refreshTools = false) } }
+                    }
                 previous = current
             }
         }
@@ -245,7 +253,7 @@ class McpRuntimeCoordinator internal constructor(
         appScope.launch {
             foregroundObserver.onForegroundStarted {
                 if (!runtimeState.isEmpty) {
-                    appScope.launch { recoverActivatedConnections(refreshTools = false) }
+                    appScope.launch { recoverActivatedConnections() }
                 }
             }
         }
@@ -255,7 +263,7 @@ class McpRuntimeCoordinator internal constructor(
             networkMonitor.isOnline
                 .drop(1)
                 .filter { it }
-                .collect { recoverActivatedConnections(refreshTools = false) }
+                .collect { recoverActivatedConnections() }
         }
     }
 
@@ -417,7 +425,7 @@ class McpRuntimeCoordinator internal constructor(
                 server.id in activeCatalogs -> McpServerCapabilityState.READY
                 server.id in timedOutServerIds -> McpServerCapabilityState.TIMEOUT
                 status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
-                status is McpStatus.CatalogRejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
+                runtime.catalogRefresh == McpCatalogRefresh.RejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
                 else -> McpServerCapabilityState.UNAVAILABLE
             }
             McpServerCapabilityOutcome(
@@ -440,6 +448,11 @@ class McpRuntimeCoordinator internal constructor(
             it.id in assistant.mcpServers && it.commonOptions.enable && it.commonOptions.name.isNotBlank()
         }
         if (selected.isEmpty()) return TurnMcpCapabilitySnapshot.EMPTY
+        catalogStore.awaitReady()
+        selected.forEach { config ->
+            catalogs.value[McpCatalogKey(net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal, config.id)]
+                ?.let { runtime(config.id).hydrateCatalog(it) }
+        }
         val selectedIds = selected.mapTo(hashSetOf()) { it.id }
         val missingCatalogIds = selected.filterTo(linkedSetOf()) { config ->
             runtimeCapabilities.value[McpRuntimeKey(config.id)]?.catalog
@@ -554,12 +567,16 @@ class McpRuntimeCoordinator internal constructor(
                 }.also(owned::add)
             }
         }
+        catalogStore.awaitReady()
         definitions.zip(targets).forEach { (definition, runtime) ->
             catalogStore.catalogs.value[definition.catalogKey]?.let { runtime.hydrateCatalog(it) }
-            runtime.reconcile(refreshTools = false)
         }
-        val settled = withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
-            coroutineScope { targets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
+        val missingCatalogTargets = definitions.zip(targets).filter { (definition, runtime) ->
+            runtimeCapabilities.value[runtime.key]?.catalog?.definitionDigest != definition.mcpDefinitionDigest()
+        }.map { it.second }
+        targets.forEach { it.reconcile(refreshTools = false) }
+        val settled = missingCatalogTargets.isEmpty() || withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
+            coroutineScope { missingCatalogTargets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
             true
         } == true
         val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled).let { capturedCapabilities ->
@@ -639,7 +656,7 @@ class McpRuntimeCoordinator internal constructor(
                 catalog != null -> McpServerCapabilityState.READY
                 timedOut -> McpServerCapabilityState.TIMEOUT
                 capability.status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
-                capability.status is McpStatus.CatalogRejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
+                capability.catalogRefresh == McpCatalogRefresh.RejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
                 else -> McpServerCapabilityState.UNAVAILABLE
             }, selected.size)
         }
@@ -877,13 +894,61 @@ class McpRuntimeCoordinator internal constructor(
 
     suspend fun clearAuthorization(serverId: ConfigurationReference.User) {
         oauthCoordinator.clearAuthorization(serverId)
-        runtime(serverId).revokeAuthorization()
+        val targets = runtimeState.activeRuntimes.filter { it.key.serverId == serverId }
+            .ifEmpty { listOf(runtime(serverId)) }
+        val failures = coroutineScope {
+            targets.map { target -> async {
+                try {
+                    target.revokeAuthorization()
+                    null
+                } catch (error: Exception) {
+                    rethrowCancellation(error)
+                    error
+                }
+            } }.mapNotNull { it.await() }
+        }
+        failures.firstOrNull()?.let { first ->
+            failures.drop(1).filter { it !== first }.forEach(first::addSuppressed)
+            throw first
+        }
     }
 
-    private suspend fun recoverActivatedConnections(refreshTools: Boolean) = coroutineScope {
+    private suspend fun recoverActivatedConnections() = coroutineScope {
         runtimeState.activeRuntimes.filter { it.isActivated() }
-            .map { serverRuntime -> async { serverRuntime.reconcile(refreshTools) } }
+            .map { target -> async { isolateLifecycleFailure(target) { target.recoverConnection() } } }
             .forEach { it.await() }
+    }
+
+    /** A revoked Session or interaction cannot terminate process-wide configuration/network observers. */
+    private suspend fun isolateLifecycleFailure(target: McpServerRuntime, operation: suspend () -> Unit) {
+        try {
+            operation()
+        } catch (error: Exception) {
+            rethrowCancellation(error)
+            Log.e(TAG, "[${target.key}] MCP lifecycle reconciliation failed", error)
+            val revoked = target.key.access != null && when (error) {
+                is net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException -> error.reason in setOf(
+                    "enterprise_data_access_unavailable", "enterprise_session_required", "enterprise_session_expired",
+                    "enterprise_session_not_ready", "enterprise_execution_lease_unavailable",
+                )
+                is IllegalStateException -> error.message in setOf("mcp_execution_lease_closed", "enterprise_session_not_ready")
+                else -> false
+            }
+            try {
+                if (revoked) target.closeAndAwait() else target.failLifecycle(error)
+            } catch (cleanup: Exception) {
+                rethrowCancellation(cleanup)
+                Log.e(TAG, "[${target.key}] MCP lifecycle cleanup failed", cleanup)
+            }
+        }
+    }
+
+    private suspend fun rethrowCancellation(error: Exception) {
+        if (error is CancellationException) {
+            currentCoroutineContext().ensureActive()
+            // A runtime-owned timeout is an operation failure; parent cancellation still propagates.
+            if (error !is TimeoutCancellationException) throw error
+        }
     }
 
     suspend fun setOAuthClientCredentials(serverId: ConfigurationReference.User, clientId: String, clientSecret: String?) {

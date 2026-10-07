@@ -197,7 +197,9 @@ internal class McpServerRuntime(
             // 授权流程进行中不被配置同步打断；需要授权的 server 只有连接参数变化时才重连
             val desiredFingerprint = config.connectionFingerprint()
             if (!forceReconnect && status == McpStatus.Authorizing) return@withDefinition
-            if (!forceReconnect && status == McpStatus.NeedsAuthorization && fingerprint == desiredFingerprint) {
+            if (!forceReconnect && status == McpStatus.NeedsAuthorization &&
+                (fingerprint == desiredFingerprint || config is McpConnectionDefinition.User &&
+                    config.config.commonOptions.oauth?.let { it.enabled && it.accessToken.isNullOrBlank() } == true)) {
                 return@withDefinition
             }
             // A non-forced lifecycle trigger joins the AppScope-owned connection/discovery
@@ -207,16 +209,20 @@ internal class McpServerRuntime(
                 connectionJob?.isActive == true &&
                 connectionRequestFingerprint == desiredFingerprint
             ) {
+                if (refreshTools && activeCatalog != null) catalogRefreshPending = true
                 return@withDefinition
             }
             val live = client?.takeIf {
-                it.transport != null && (status is McpStatus.Ready || status is McpStatus.CatalogStale)
+                it.transport != null && status is McpStatus.Ready
             }
             if (!forceReconnect && live != null && fingerprint == desiredFingerprint) {
-                if (refreshTools) requestCatalogRefreshLocked()
+                if (refreshTools) {
+                    resumeNotificationsLocked(explicit = true)
+                    requestCatalogRefreshLocked()
+                }
                 return@withDefinition
             }
-            startConnectionLocked(config, retryAfterFailure = true)
+            startConnectionLocked(config, retryAfterFailure = true, refreshTools = refreshTools)
         }
     }
 
@@ -243,20 +249,18 @@ internal class McpServerRuntime(
             catalog.definitionDigest != config.mcpDefinitionDigest() || catalog.managed != config.managed) return
         val current = activeCatalog
         if (current != null && current.revision >= catalog.revision) return
-        val restoredStatus = when (val health = status) {
-            McpStatus.Idle -> McpStatus.CatalogStale(
-                catalog.tools.size,
-                catalog.revision,
-                "restored last-known-good catalog; session is not connected",
-            )
-            else -> health
-        }
-        setStatusLocked(restoredStatus, catalog)
+        setStatusLocked(status, catalog)
     }
 
-    suspend fun revokeAuthorization() = withContext(ioDispatcher) {
-        mutex.withLock {
-            if (closing) return@withLock
+    suspend fun revokeAuthorization() = retireConnection(McpStatus.NeedsAuthorization)
+
+    suspend fun failLifecycle(error: Throwable, expectedGeneration: Long? = null) =
+        retireConnection(failureStatus(error), expectedGeneration)
+
+    private suspend fun retireConnection(reason: McpStatus, expectedGeneration: Long? = null) = withContext(ioDispatcher) {
+        val cleanup = mutex.withLock {
+            if (expectedGeneration != null && generation.get() != expectedGeneration) return@withLock null
+            if (closing) return@withLock closeOperation
             val revokedGeneration = generation.incrementAndGet()
             cancelAllJobsLocked()
             connectionJob?.cancel()
@@ -264,23 +268,20 @@ internal class McpServerRuntime(
             connectionRequestFingerprint = null
             activeConnection = null
             fingerprint = null
-            runtimeScope.launch(ioDispatcher) {
+            setStatusLocked(reason)
+            runtimeScope.async(ioDispatcher) {
                 try {
                     connectionOperationMutex.withLock { closeConnectionsBefore(revokedGeneration) }
-                } catch (timeout: TimeoutCancellationException) {
-                    mutex.withLock {
-                        if (generation.get() == revokedGeneration) setStatusLocked(McpStatus.Error("MCP resource cleanup timed out"))
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
                 } catch (error: Exception) {
+                    if (error is CancellationException && error !is TimeoutCancellationException) throw error
                     mutex.withLock {
                         if (generation.get() == revokedGeneration) setStatusLocked(failureStatus(error))
                     }
+                    throw error
                 }
             }
-            setStatusLocked(McpStatus.NeedsAuthorization)
         }
+        cleanup?.await()
     }
 
     /** Waits for the operation accepted before this call; coalesced follow-up refreshes drain too. */
@@ -309,8 +310,8 @@ internal class McpServerRuntime(
             closing = true
             generation.incrementAndGet()
             activated = false
-            setStatusLocked(McpStatus.Idle)
             activeConnection = null
+            setStatusLocked(McpStatus.Idle)
             fingerprint = null
             runtimeJob.cancel()
         }
@@ -344,6 +345,7 @@ internal class McpServerRuntime(
         config: McpConnectionDefinition,
         retryAfterFailure: Boolean,
         cancelReconnect: Boolean = true,
+        refreshTools: Boolean = false,
     ) {
         if (closing) return
         if (cancelReconnect) reconnectAttempt = 0
@@ -364,10 +366,10 @@ internal class McpServerRuntime(
         val retainedCatalog = activeCatalog?.takeIf {
             it.definitionDigest == config.mcpDefinitionDigest()
         }
-        if (retainedCatalog == null) setStatusLocked(McpStatus.Idle, null)
+        setStatusLocked(McpStatus.Idle, retainedCatalog, McpCatalogRefresh.Idle, McpNotificationHealth.NotEstablished)
         connectionJob = runtimeScope.launch(ioDispatcher) {
             connectionOperationMutex.withLock {
-                runConnectionOperation(config, assignedGeneration, retryAfterFailure)
+                runConnectionOperation(config, assignedGeneration, retryAfterFailure, refreshTools)
             }
         }
     }
@@ -376,6 +378,7 @@ internal class McpServerRuntime(
         requestedConfig: McpConnectionDefinition,
         assignedGeneration: Long,
         retryAfterFailure: Boolean,
+        refreshTools: Boolean,
     ) {
         var resources: McpConnectionResources? = null
         var newClient: Client? = null
@@ -406,11 +409,14 @@ internal class McpServerRuntime(
                     newClient = createdClient
                     ownedResources.client = createdClient
                     setupNotificationHandlers(createdClient, config, assignedGeneration)
+                    (transport as? McpStreamableHttpTransport)?.onNotificationState { health ->
+                        runtimeScope.launch { onNotificationState(assignedGeneration, createdClient, health) }
+                    }
                     transport.onClose {
                         runtimeScope.launch { onTransportClosed(assignedGeneration, createdClient) }
                     }
                     transport.onError { error ->
-                        runtimeScope.launch { onTransportError(assignedGeneration, createdClient, error) }
+                        runtimeScope.launch { onTransportError(assignedGeneration, createdClient, config, error) }
                     }
                     val admitted = withDefinition { current ->
                         if (!matchesDesiredDefinitionLocked(assignedGeneration, config, current)) return@withDefinition false
@@ -431,6 +437,22 @@ internal class McpServerRuntime(
                         true
                     }
                     if (!discovering) return@withTimeout
+                    if (!refreshTools && withDefinition { current ->
+                        val retained = activeCatalog?.takeIf { it.definitionDigest == config.mcpDefinitionDigest() }
+                        if (retained == null || !matchesClientLeaseLocked(assignedGeneration, createdClient, config, current) ||
+                            status != McpStatus.Discovering || createdClient.transport == null) false
+                        else {
+                            checkNotNull(createdClient.serverCapabilities?.tools) { "MCP server does not declare tools capability" }
+                            setStatusLocked(McpStatus.Ready(retained.tools.size, retained.revision), retained)
+                            catalogAccepted = true
+                            reconnectAttempt = 0
+                            if (catalogRefreshPending) {
+                                catalogRefreshPending = false
+                                requestCatalogRefreshLocked()
+                            }
+                            true
+                        }
+                    }) return@withTimeout
                     val candidate = McpCatalogDiscovery.fetchCandidate(
                         config.catalogKey,
                         config.mcpDefinitionDigest(), createdClient, config.managed,
@@ -444,7 +466,7 @@ internal class McpServerRuntime(
                         reconnectAttempt = 0
                         logger(
                             config.name,
-                            "Discovery completed (${status.catalogCountForLog()} tools available)",
+                            "Discovery completed (${activeCatalog?.tools?.size ?: 0} tools available)",
                         )
                         if (catalogRefreshPending) {
                             catalogRefreshPending = false
@@ -680,6 +702,15 @@ internal class McpServerRuntime(
                 diagnosticMessage = "MCP authorization is required",
             )
         }
+        if (status is McpStatus.Error && reconnectAttempt >= policy.maxTotalReconnectAttempts) {
+            reconnectAttempt = 0
+            if (networkMonitor.isOnline.value) startConnectionLocked(currentConfig, retryAfterFailure = true, refreshTools = true)
+            else scheduleReconnectLocked(currentGeneration())
+        }
+        if (status is McpStatus.Error && client?.serverCapabilities?.tools == null && client?.serverCapabilities != null) {
+            return@withDefinition McpToolCallPreparation.Rejected(McpToolFailureKind.PROTOCOL_INCOMPATIBLE,
+                currentConfig.name, "MCP server does not declare tools capability")
+        }
         if (status.blocksInvocation()) {
             return@withDefinition McpToolCallPreparation.Rejected(
                 kind = McpToolFailureKind.SERVER_UNAVAILABLE,
@@ -802,28 +833,22 @@ internal class McpServerRuntime(
                 setStatusLocked(
                     McpStatus.Ready(catalogResult.snapshot.tools.size, catalogResult.snapshot.revision),
                     catalogResult.snapshot,
+                    catalogRefresh = McpCatalogRefresh.Idle,
                 )
             }
             is McpCatalogCommitResult.Unchanged -> {
                 setStatusLocked(
                     McpStatus.Ready(catalogResult.snapshot.tools.size, catalogResult.snapshot.revision),
                     catalogResult.snapshot,
+                    catalogRefresh = McpCatalogRefresh.Idle,
                 )
             }
             is McpCatalogCommitResult.RejectedGeneration -> {
                 setStatusLocked(McpStatus.Error("MCP catalog generation is stale; synchronize enterprise configuration"))
             }
             is McpCatalogCommitResult.RejectedEmpty -> {
-                setStatusLocked(
-                    catalogResult.lastKnownGood?.let { catalog ->
-                        McpStatus.CatalogStale(
-                        lastKnownGoodCount = catalog.tools.size,
-                        catalogRevision = catalog.revision,
-                        message = "server returned an empty tools catalog",
-                    )
-                    } ?: McpStatus.CatalogRejectedEmpty,
-                    catalogResult.lastKnownGood,
-                )
+                val catalog = catalogResult.lastKnownGood
+                setStatusLocked(McpStatus.Ready(catalog?.tools?.size ?: 0, catalog?.revision ?: 0), catalog, McpCatalogRefresh.RejectedEmpty)
             }
         }
     }
@@ -856,31 +881,75 @@ internal class McpServerRuntime(
     private suspend fun onTransportError(
         capturedGeneration: Long,
         capturedClient: Client,
+        config: McpConnectionDefinition,
         error: Throwable,
     ) {
+        if (generation.get() != capturedGeneration) return
+        acceptManagedRuntimeProblem(config, error)
         ManagedSnapshotRequired.find(error)?.let {
             acceptManagedBarrier(capturedGeneration, it)
             return
         }
 
-        if (McpProtocolFailureClassifier.isSseStreamGiveUp(error)) {
-            mutex.withLock {
-                if (generation.get() != capturedGeneration || client !== capturedClient) return@withLock
-                if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withLock
-                activeCatalog?.let { catalog ->
-                    setStatusLocked(
-                        McpStatus.CatalogStale(
-                            catalog.tools.size,
-                            catalog.revision,
-                            "notification stream is unavailable; command transport remains usable",
-                        ),
-                        catalog,
-                    )
+        mutex.withLock {
+            if (generation.get() != capturedGeneration || client !== capturedClient || closing) return@withLock
+            if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withLock
+            when {
+                McpProtocolFailureClassifier.isSseStreamGiveUp(error) -> publishHealthLocked(
+                    notifications = McpNotificationHealth.Unavailable(failureStatus(error), retryable = true))
+                McpProtocolFailureClassifier.isUnauthorized(error) -> {
+                    cancelRecoveryJobsLocked()
+                    setStatusLocked(McpStatus.NeedsAuthorization)
+                }
+                McpProtocolFailureClassifier.isConnectionError(error) -> scheduleReconnectLocked(capturedGeneration)
+                else -> {
+                    cancelRecoveryJobsLocked()
+                    setStatusLocked(failureStatus(error))
                 }
             }
-            return
         }
-        onTransportClosed(capturedGeneration, capturedClient)
+    }
+
+    private suspend fun onNotificationState(epoch: Long, expectedClient: Client, health: McpNotificationStreamState) {
+        mutex.withLock {
+            if (generation.get() != epoch || client !== expectedClient || closing) return@withLock
+            val previous = capability().notifications
+            val next = when (health) {
+                McpNotificationStreamState.Starting -> McpNotificationHealth.Connecting
+                McpNotificationStreamState.Listening -> McpNotificationHealth.Listening
+                McpNotificationStreamState.Unsupported -> McpNotificationHealth.Unsupported
+                is McpNotificationStreamState.Unavailable -> McpNotificationHealth.Unavailable(failureStatus(health.error), health.retryable)
+            }
+            // Starting an attempt cannot clear a failure before a real GET recovers.
+            if (next != McpNotificationHealth.Connecting || previous !is McpNotificationHealth.Unavailable) {
+                publishHealthLocked(notifications = next)
+            }
+            if (next == McpNotificationHealth.Listening && (previous is McpNotificationHealth.Unavailable || previous == McpNotificationHealth.Listening)) requestCatalogRefreshLocked()
+        }
+    }
+
+    private fun resumeNotificationsLocked(explicit: Boolean) {
+        val health = capability().notifications as? McpNotificationHealth.Unavailable ?: return
+        if (!explicit && !health.retryable) return
+        val transport = activeConnection?.transport as? McpStreamableHttpTransport ?: return
+        runtimeScope.launch { transport.resumeNotificationStream() }
+    }
+
+    /** Passive signals wake the same recovery owner without replacing a pending attempt. */
+    suspend fun recoverConnection() = withContext(ioDispatcher) {
+        withDefinition { config ->
+            if (!activated || closing || !stateStore.isCurrent(this@McpServerRuntime)) return@withDefinition
+            if (config == null) { teardownLocked(); return@withDefinition }
+            if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withDefinition
+            if (connectionJob?.isActive == true || reconnectJob?.isActive == true) return@withDefinition
+            if (client?.transport != null && status is McpStatus.Ready && fingerprint == config.connectionFingerprint()) {
+                if (networkMonitor.isOnline.value && foregroundState.value) resumeNotificationsLocked(explicit = false)
+                return@withDefinition
+            }
+            if (status is McpStatus.Error && reconnectAttempt < policy.maxTotalReconnectAttempts) return@withDefinition
+            if (reconnectAttempt >= policy.maxTotalReconnectAttempts) reconnectAttempt = 0
+            scheduleReconnectLocked(generation.get())
+        }
     }
 
     suspend fun acceptManagedBarrier(epoch: Long, barrier: ManagedSnapshotRequired) {
@@ -912,6 +981,7 @@ internal class McpServerRuntime(
         val assignedGeneration = generation.get()
         catalogRefreshPreviousStatus = status
         catalogRefreshPreviousCatalog = activeCatalog
+        publishHealthLocked(catalogRefresh = McpCatalogRefresh.Refreshing)
         if (activeCatalog == null) setStatusLocked(McpStatus.Discovering)
         catalogRefreshJob = runtimeScope.launch(ioDispatcher) {
             drainCatalogRefreshes(assignedGeneration, getServerName())
@@ -979,12 +1049,16 @@ internal class McpServerRuntime(
                         config = config,
                         retryAfterFailure = true,
                         cancelReconnect = false,
+                        refreshTools = true,
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger(getServerName(), "Reconnect failed: ${e.message}")
+                Log.e(TAG, "MCP recovery admission failed", e)
+                logger(getServerName(), "Reconnect failed: ${failureDetail(e)}")
+                // Retirement cancels this worker; its already-owned connection still has to exit.
+                withContext(NonCancellable) { failLifecycle(e, capturedGeneration) }
             }
         }
     }
@@ -992,16 +1066,27 @@ internal class McpServerRuntime(
     private fun setStatusLocked(
         newStatus: McpStatus,
         catalog: McpCatalogSnapshot? = activeCatalog,
+        catalogRefresh: McpCatalogRefresh = capability().catalogRefresh,
+        notifications: McpNotificationHealth = capability().notifications,
     ) {
         if (!stateStore.isCurrent(this@McpServerRuntime)) return
         val liveClient = client
-        val sessionCallable = !newStatus.blocksInvocation() && liveClient?.transport != null &&
+        val sessionCallable = !closing && !barrierReported && !newStatus.blocksInvocation() && liveClient?.transport != null &&
             liveClient.serverCapabilities?.tools != null
         // Connection health belongs to this runtime; the store shares only confirmed managed directories.
-        stateStore.publish(this@McpServerRuntime, McpRuntimeCapability(newStatus, catalog, sessionCallable))
+        stateStore.publish(this@McpServerRuntime, capability().copy(status = newStatus, catalog = catalog, sessionCallable = sessionCallable,
+            catalogRefresh = catalogRefresh, notifications = notifications))
+    }
+
+    private fun publishHealthLocked(
+        catalogRefresh: McpCatalogRefresh = capability().catalogRefresh,
+        notifications: McpNotificationHealth = capability().notifications,
+    ) {
+        stateStore.publish(this, capability().copy(catalogRefresh = catalogRefresh, notifications = notifications))
     }
 
     private fun cancelRecoveryJobsLocked() {
+        if (capability().catalogRefresh == McpCatalogRefresh.Refreshing) publishHealthLocked(catalogRefresh = McpCatalogRefresh.Idle)
         reconnectJob?.cancel()
         reconnectJob = null
         catalogRefreshJob?.cancel()
@@ -1090,17 +1175,8 @@ internal class McpServerRuntime(
                     mutex.withLock {
                         if (catalogAccepted || generation.get() != assignedGeneration || client !== lease.client) return@withLock
                         if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withLock
-                        val lastGood = lease.previousCatalog
-                        setStatusLocked(
-                            lastGood?.let { catalog ->
-                                McpStatus.CatalogStale(
-                                    catalog.tools.size,
-                                    catalog.revision,
-                                    "catalog refresh timed out",
-                                )
-                            } ?: McpStatus.Error("MCP catalog refresh timed out"),
-                            lastGood,
-                        )
+                        publishHealthLocked(catalogRefresh = McpCatalogRefresh.Failed(failureStatus(timeout)))
+                        if (status == McpStatus.Discovering) setStatusLocked(lease.previousStatus, lease.previousCatalog)
                     }
                 } catch (cancelled: CancellationException) {
                     val refreshJob = currentCoroutineContext()[Job]
@@ -1115,6 +1191,16 @@ internal class McpServerRuntime(
                     throw cancelled
                 } catch (error: Throwable) {
                     acceptManagedRuntimeProblem(lease.config, error)
+                    try {
+                        if (!matchesClientLease(assignedGeneration, lease.client, lease.config)) return
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (authorityFailure: Exception) {
+                        // This worker owns the failed refresh; finish retiring its resources even
+                        // though retirement cancels this worker along with the other generation jobs.
+                        withContext(NonCancellable) { failLifecycle(authorityFailure, assignedGeneration) }
+                        return
+                    }
                     mutex.withLock {
                         if (generation.get() != assignedGeneration || client !== lease.client) return@withLock
                         if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withLock
@@ -1124,13 +1210,8 @@ internal class McpServerRuntime(
                             McpProtocolFailureClassifier.isConnectionError(error) ->
                                 scheduleReconnectLocked(assignedGeneration)
                             else -> {
-                                val lastGood = lease.previousCatalog
-                                setStatusLocked(
-                                    lastGood?.let { catalog ->
-                                        McpStatus.CatalogStale(catalog.tools.size, catalog.revision, failureDetail(error))
-                                    } ?: failureStatus(error, "catalog discovery failed"),
-                                    lastGood,
-                                )
+                                publishHealthLocked(catalogRefresh = McpCatalogRefresh.Failed(failureStatus(error)))
+                                if (status == McpStatus.Discovering) setStatusLocked(lease.previousStatus, lease.previousCatalog)
                             }
                         }
                     }
@@ -1144,6 +1225,7 @@ internal class McpServerRuntime(
                         catalogRefreshPending = false
                         catalogRefreshPreviousStatus = status
                         catalogRefreshPreviousCatalog = activeCatalog
+                        publishHealthLocked(catalogRefresh = McpCatalogRefresh.Refreshing)
                         if (activeCatalog == null) setStatusLocked(McpStatus.Discovering)
                         true
                     }
@@ -1153,15 +1235,21 @@ internal class McpServerRuntime(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            if (serverId is ConfigurationReference.User) Log.e(TAG, "Failed to sync tools after list_changed for $configName", error)
+            Log.e(TAG, "Failed to sync tools after list_changed for $configName", error)
             logger(configName, "catalog refresh after list_changed failed: ${failureDetail(error)}")
+            // Admission can fail before a refresh lease exists, after the debounce delay.
+            withContext(NonCancellable) { failLifecycle(error, assignedGeneration) }
         } finally {
-            mutex.withLock {
-                if (catalogRefreshJob === kotlinx.coroutines.currentCoroutineContext()[Job]) {
-                    catalogRefreshJob = null
-                    catalogRefreshPending = false
-                    catalogRefreshPreviousStatus = null
-                    catalogRefreshPreviousCatalog = null
+            val completedJob = currentCoroutineContext()[Job]
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    if (catalogRefreshJob === completedJob) {
+                        if (capability().catalogRefresh == McpCatalogRefresh.Refreshing) publishHealthLocked(catalogRefresh = McpCatalogRefresh.Idle)
+                        catalogRefreshJob = null
+                        catalogRefreshPending = false
+                        catalogRefreshPreviousStatus = null
+                        catalogRefreshPreviousCatalog = null
+                    }
                 }
             }
         }
@@ -1318,13 +1406,7 @@ private fun McpStatus.blocksInvocation(): Boolean =
     this == McpStatus.NeedsAuthorization || this == McpStatus.Authorizing ||
         this == McpStatus.Connecting || this == McpStatus.Discovering ||
         this is McpStatus.Reconnecting || this is McpStatus.RetryScheduled ||
-        this == McpStatus.WaitingNetwork
-
-private fun McpStatus.catalogCountForLog(): Int = when (this) {
-    is McpStatus.Ready -> toolCount
-    is McpStatus.CatalogStale -> lastKnownGoodCount
-    else -> 0
-}
+        this == McpStatus.WaitingNetwork || this is McpStatus.Error
 
 /** Retained by its runtime until both SDK and original transport cleanup have completed. */
 private class McpConnectionResources(

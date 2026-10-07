@@ -924,7 +924,6 @@
   <string name="setting_page_interaction_notification_settings">Interaction &amp;amp; Notifications</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">Configure MCP Servers</string>
-  <string name="mcp_status_idle">Not connected</string>
   <string name="mcp_status_connecting">Connecting</string>
   <string name="mcp_status_reconnecting">Reconnecting (%1$d/%2$d)</string>
   <string name="mcp_status_maintenance_reconnecting">Checking whether the MCP service has recovered</string>
@@ -1584,7 +1583,6 @@
   <string name="mcp_status_maintenance_retry">MCP service temporarily unavailable; next recovery check in %1$d seconds</string>
   <string name="mcp_status_waiting_network">Waiting for network</string>
   <string name="mcp_status_catalog_rejected_empty">Server returned no tools; the previous verified catalog was not replaced</string>
-  <string name="mcp_status_catalog_stale">Using the last verified catalog (%1$d tools); refresh failed</string>
   <string name="error_mcp_turn_capability_unavailable">Some MCP servers were unavailable for this turn: %1$s</string>
   <string name="error_mcp_enterprise_policy_skipped">Enterprise policy disabled personal tools: %1$s. This chat will continue.</string>
   <string name="error_mcp_reference_unavailable">This assistant refers to unavailable tools: %1$s. Review its MCP settings.</string>
@@ -2136,4 +2134,11 @@
   <string name="configuration_continue_edit">Continue editing</string>
   <string name="search_shared_definition_notice">Your search services share one configuration across spaces.</string>
   <string name="mcp_connection_details">Details</string>
+  <string name="mcp_status_on_demand">Connects when used</string>
+  <string name="mcp_catalog_saved">Saved directory: %1$d tools · connects when used</string>
+  <string name="mcp_notification_unavailable">Tool connection available; automatic updates unavailable</string>
+  <string name="mcp_catalog_refresh_failed">Refresh failed; previous directory retained</string>
+  <string name="mcp_catalog_refreshing">Refreshing tools; previous directory retained</string>
+  <string name="mcp_refresh_personal">Refresh my MCPs</string>
+  <string name="mcp_readiness_on_demand">%1$d selected · connects when used</string>
 </resources>

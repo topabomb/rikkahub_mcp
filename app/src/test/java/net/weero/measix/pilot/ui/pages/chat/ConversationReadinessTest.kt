@@ -60,7 +60,7 @@ class ConversationReadinessTest {
         val readiness = Settings().buildConversationReadiness(assistant, mapOf(workspace to "Shared workspace"), 3,
             mcpServers = listOf(choice), selectedModel = Model(), hasAvailableChatModel = true)
         assertTrue(readiness.canSend)
-        assertEquals(McpReadiness.UNAVAILABLE, readiness.mcpState)
+        assertEquals(McpReadiness.ON_DEMAND, readiness.mcpState)
         assertEquals(0, readiness.readyMcpCount)
         assertEquals(1, readiness.localToolCount)
         assertEquals(2, readiness.persistedLocalToolCount)

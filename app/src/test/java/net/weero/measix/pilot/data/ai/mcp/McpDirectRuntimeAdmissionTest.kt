@@ -101,13 +101,14 @@ class McpDirectRuntimeAdmissionTest {
             val retained = states.capabilities.value.getValue(runtime.key)
             assertEquals(3L, retained.catalog?.revision)
             assertTrue(retained.catalog!!.tools.isEmpty())
-            assertEquals("restored last-known-good catalog; session is not connected",
-                (retained.status as McpStatus.CatalogStale).message)
+            assertEquals(McpStatus.Idle, retained.status)
             assertFalse("A peer directory must not make this session callable", retained.sessionCallable)
             // A failed refresh restoring its old snapshot cannot undo a peer's confirmed removal.
-            states.publish(runtime, McpRuntimeCapability(McpStatus.CatalogStale(1, 1, "refresh failed"), initial, true))
+            states.publish(runtime, McpRuntimeCapability(McpStatus.Ready(1, 1), initial, true,
+                catalogRefresh = McpCatalogRefresh.Failed(McpStatus.Error("refresh failed"))))
             val restored = states.capabilities.value.getValue(runtime.key)
-            assertEquals(McpStatus.CatalogStale(0, 3, "refresh failed"), restored.status)
+            assertEquals(McpStatus.Ready(0, 3), restored.status)
+            assertEquals(McpCatalogRefresh.Failed(McpStatus.Error("refresh failed")), restored.catalogRefresh)
             assertEquals(3L, restored.catalog?.revision)
             assertTrue("Connection state still belongs to the publishing runtime", restored.sessionCallable)
             assertTrue(admit() is McpToolCallAdmission.Rejected)

@@ -179,7 +179,8 @@ internal class McpConnectionLifecycleTest : McpRuntimeCoordinatorTestBase() {
         runCurrent()
 
         val capability = manager.runtimeCapabilities.value[McpRuntimeKey(SERVER_ID)]
-        assertTrue(capability?.status is McpStatus.CatalogStale)
+        assertTrue(capability?.status is McpStatus.Ready)
+        assertTrue(capability?.notifications is McpNotificationHealth.Unavailable)
         assertTrue(capability?.sessionCallable == true)
         assertEquals(1, createdClients.size)
     }

@@ -894,7 +894,6 @@
   <string name="setting_page_interaction_notification_settings">互动与通知</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">配置MCP服务器</string>
-  <string name="mcp_status_idle">未连接</string>
   <string name="mcp_status_connecting">连接中</string>
   <string name="mcp_status_reconnecting">重连中 (%1$d/%2$d)</string>
   <string name="mcp_status_maintenance_reconnecting">正在检查 MCP 服务是否恢复</string>
@@ -907,7 +906,6 @@
   <string name="mcp_status_maintenance_retry">MCP 服务暂时不可用；%1$d 秒后再次检查</string>
   <string name="mcp_status_waiting_network">等待网络恢复</string>
   <string name="mcp_status_catalog_rejected_empty">服务端返回零工具；未替换上次验证通过的目录</string>
-  <string name="mcp_status_catalog_stale">正在沿用上次验证通过的目录（%1$d 个工具）；刷新失败</string>
   <string name="mcp_oauth_authorize">授权</string>
   <string name="mcp_oauth_authorizing_hint">正在授权，请在浏览器中完成…</string>
   <string name="mcp_oauth_cancel_authorization">取消授权</string>
@@ -2128,4 +2126,11 @@
   <string name="configuration_continue_edit">继续编辑</string>
   <string name="search_shared_definition_notice">个人搜索服务，使用它的空间共用此配置。</string>
   <string name="mcp_connection_details">详情</string>
+  <string name="mcp_status_on_demand">使用时连接</string>
+  <string name="mcp_catalog_saved">已保存 %1$d 个工具 · 使用时连接</string>
+  <string name="mcp_notification_unavailable">工具连接可用，自动更新暂不可用</string>
+  <string name="mcp_catalog_refresh_failed">刷新失败，保留上次目录</string>
+  <string name="mcp_catalog_refreshing">正在刷新工具，保留上次目录</string>
+  <string name="mcp_refresh_personal">刷新我的 MCP</string>
+  <string name="mcp_readiness_on_demand">已选择 %1$d 项 · 使用时连接</string>
 </resources>

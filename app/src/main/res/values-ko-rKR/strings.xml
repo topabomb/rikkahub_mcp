@@ -884,7 +884,6 @@
   <string name="setting_page_interaction_notification_settings">상호작용 &amp;amp; 알림</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">MCP 서버 구성</string>
-  <string name="mcp_status_idle">연결되지 않음</string>
   <string name="mcp_status_connecting">연결 중</string>
   <string name="mcp_status_reconnecting">재연결 중 (%1$d/%2$d)</string>
   <string name="mcp_status_maintenance_reconnecting">MCP 서비스 복구 여부를 확인하는 중</string>
@@ -897,7 +896,6 @@
   <string name="mcp_status_maintenance_retry">MCP 서비스를 일시적으로 사용할 수 없습니다. %1$d초 후 다시 확인합니다</string>
   <string name="mcp_status_waiting_network">네트워크 대기 중</string>
   <string name="mcp_status_catalog_rejected_empty">서버가 도구를 반환하지 않아 마지막 검증 카탈로그를 유지합니다</string>
-  <string name="mcp_status_catalog_stale">마지막 검증 카탈로그(도구 %1$d개)를 사용 중이며 새로 고침에 실패했습니다</string>
   <string name="mcp_oauth_authorize">인증</string>
   <string name="mcp_oauth_authorizing_hint">인증 중, 브라우저에서 완료하세요…</string>
   <string name="mcp_oauth_cancel_authorization">인증 취소</string>
@@ -2128,4 +2126,11 @@
   <string name="configuration_continue_edit">편집 계속</string>
   <string name="search_shared_definition_notice">개인 검색 서비스이며, 사용하는 공간은 같은 설정을 공유합니다.</string>
   <string name="mcp_connection_details">세부 정보</string>
+  <string name="mcp_status_on_demand">사용할 때 연결</string>
+  <string name="mcp_catalog_saved">저장된 도구 %1$d개 · 사용 시 연결</string>
+  <string name="mcp_notification_unavailable">도구 연결은 사용 가능하지만 자동 업데이트는 사용할 수 없습니다</string>
+  <string name="mcp_catalog_refresh_failed">새로고침 실패 · 이전 목록 유지</string>
+  <string name="mcp_catalog_refreshing">도구 새로고침 중 · 이전 목록 유지</string>
+  <string name="mcp_refresh_personal">내 MCP 새로고침</string>
+  <string name="mcp_readiness_on_demand">%1$d개 선택됨 · 사용 시 연결</string>
 </resources>

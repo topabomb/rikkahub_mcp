@@ -46,6 +46,127 @@ class SettingMcpPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun toolbarAndPullGestureShareOneRefreshInPersonalAndEnterpriseViews() {
+        val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "My MCP"), url = "https://example.test/mcp")
+        val row = config.toPresentation(McpRuntimeCapability.EMPTY)
+        val catalog = MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(
+            RealmSelection(RealmAccess.Personal, 1), McpCatalogReadState.Available(listOf(row))))
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(listOf(row))
+        every { query.catalog } returns catalog
+        val commands = mockk<McpApplicationService>()
+        var calls = 0
+        var accepted = CompletableDeferred<McpRefreshReceipt>()
+        coEvery { commands.refreshAll() } coAnswers { calls++; accepted.await() }
+        compose.setContent {
+            McpTestTheme {
+                CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                    LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup()))) {
+                    SettingMcpPage(commands, query, mockk())
+                }
+            }
+        }
+        val refresh = compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_personal))
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_personal)).assertDoesNotExist()
+        refresh.assertIsEnabled().performClick()
+        compose.waitUntil { calls == 1 }
+        refresh.assertIsNotEnabled()
+        // The list fills the scaffold behind the app bar; start inside its visible content.
+        compose.onNode(hasScrollAction()).performTouchInput { swipeDown(startY = height * 0.3f, endY = height * 0.85f) }
+        compose.runOnIdle { org.junit.Assert.assertEquals(1, calls); accepted.complete(McpRefreshReceipt(1, 1)) }
+        compose.waitForIdle()
+        refresh.assertIsEnabled()
+        compose.runOnIdle { accepted = CompletableDeferred() }
+        compose.onNode(hasScrollAction()).performTouchInput { swipeDown(startY = height * 0.3f, endY = height * 0.85f) }
+        compose.waitUntil { calls == 2 }
+        compose.runOnIdle { accepted.complete(McpRefreshReceipt(1, 1)) }
+        compose.waitForIdle()
+        val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(EnterpriseAuthority("refresh-test"), "user"), "session")
+        compose.runOnIdle {
+            accepted = CompletableDeferred()
+            catalog.value = McpCatalogUiModel(RealmSelection(access, 2), McpCatalogReadState.Available(listOf(row.copy(access = access))))
+        }
+        compose.onNode(hasScrollAction()).performTouchInput { swipeDown(startY = height * 0.3f, endY = height * 0.85f) }
+        compose.waitUntil { calls == 3 }
+        refresh.assertIsNotEnabled()
+        compose.runOnIdle { accepted.complete(McpRefreshReceipt(1, 1)) }
+        compose.waitForIdle()
+        refresh.assertIsEnabled()
+        coVerify(exactly = 3) { commands.refreshAll() }
+    }
+
+    /** Display evidence uses a controlled query projection; runtime/enterprise authorization is tested separately. */
+    @Test
+    fun enterpriseAndSharedPersonalDefinitionsRemainClearInDarkLargeText() {
+        val authority = EnterpriseAuthority("mcp-ui-review")
+        val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "reviewer"), "review-session")
+        val diagnostic = "JsonDecodingException: Notification stream rejected malformed JSON\n" +
+            "GET /mcp/events; previous confirmed directory revision=7 remains available\n" +
+            (1..18).joinToString("\n") { "Caused by: fixture notification detail $it" }
+        val managed = McpServerPresentation(
+            ConfigurationReference.Enterprise(authority, "managed_research"), "Enterprise research tools", true,
+            null, access, requiredEnabled = true, status = McpStatus.Ready(1, 7), sessionCallable = true,
+            tools = listOf(McpToolPresentation("read_research", "Read the confirmed enterprise research directory",
+                JsonObject(emptyMap()), true, false)),
+            allowsAllTools = true, directoryConfirmed = true, connectionDiagnostic = diagnostic,
+            notifications = McpNotificationHealth.Unavailable(McpStatus.Error("Notification JSON rejected", diagnostic), false),
+        )
+        val config = McpServerConfig.StreamableHTTPServer(
+            commonOptions = McpCommonOptions(name = "Personal research tools shared across spaces"),
+            url = "https://example.test/mcp",
+        )
+        val user = config.toPresentation(McpRuntimeCapability.EMPTY).copy(
+            directoryConfirmed = true,
+            tools = listOf(McpToolPresentation("read_personal", "Read a personal document", JsonObject(emptyMap()), true, false)),
+        )
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(listOf(user))
+        every { query.catalog } returns MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(
+            RealmSelection(access, 1), McpCatalogReadState.Available(listOf(managed, user.copy(access = access))),
+        ))
+        compose.setContent {
+            val originalDensity = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(originalDensity.density, fontScale = 1.4f)) {
+                net.weero.measix.pilot.ui.theme.MeasixTheme(colorMode = net.weero.measix.pilot.ui.theme.ColorMode.DARK) {
+                    CompositionLocalProvider(
+                        LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
+                        LocalToaster provides rememberToasterState(),
+                        LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup())),
+                    ) { SettingMcpPage(mockk(), query, mockk()) }
+                }
+            }
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_enterprise_read_only)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_notification_unavailable)).performScrollTo().assertIsDisplayed()
+        compose.onAllNodes(isToggleable()).assertCountEquals(0)
+        captureMcpProjectionEvidence("enterprise-readonly-notification-degraded-dark-large")
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_connection_details)).performScrollTo().performClick()
+        compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        captureMcpProjectionEvidence("enterprise-notification-diagnostic-dark-large")
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_shared_definition_notice)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(config.commonOptions.name).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.managed_configuration_source_local)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_catalog_saved, 1)).assertIsDisplayed()
+        captureMcpProjectionEvidence("shared-personal-saved-directory-dark-large")
+    }
+
+    private fun captureMcpProjectionEvidence(name: String) {
+        compose.waitForIdle()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.waitForIdle(250, 5_000)
+        val image = instrumentation.uiAutomation.takeScreenshot()
+        val directory = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.let { java.io.File(it) } ?: requireNotNull(compose.activity.getExternalFilesDir(null))
+        check(directory.isDirectory || directory.mkdirs())
+        java.io.File(directory, "mcp-projection-$name.png").outputStream().use {
+            check(image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+        }
+        image.recycle()
+    }
+
+    @Test
     fun connectionDiagnosticsUseTheSharedViewerAndCopyKeepsTheServerAndDetailsOpen() {
         val diagnostic = "ConnectException: /192.168.1.8:9100\n" + (1..60).joinToString("\n") { "Caused by: IOException: original MCP detail $it" }
         val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Personal MCP"), url = "https://example.test/mcp")

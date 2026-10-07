@@ -42,7 +42,7 @@ class McpPickerAndroidTest {
         val state = mutableStateOf(choice().copy(status = McpStatus.Idle, sessionCallable = false,
             tools = listOf(missing.copy(unavailableReason = McpToolUnavailableReason.DIRECTORY_UNAVAILABLE)), directoryConfirmed = false))
         compose.setContent { MaterialTheme { McpPicker(listOf(state.value), onToggle = { _, _ -> error("fixed binding") }) } }
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_tool_directory_unavailable)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_on_demand)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 0, 1)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_tools_partially_available, 0, 1)).assertDoesNotExist()
         compose.runOnIdle { state.value = choice(emptyList()) }
@@ -86,7 +86,7 @@ class McpPickerAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_ready, 1)).assertDoesNotExist()
         compose.runOnIdle { state.value = state.value.copy(status = McpStatus.Idle, sessionCallable = false, connectionsPartiallyReady = false) }
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_idle)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_catalog_saved, 1)).assertIsDisplayed()
     }
 
     @Test fun longListKeepsTheLastServerAndItsOriginalCommandReachable() {

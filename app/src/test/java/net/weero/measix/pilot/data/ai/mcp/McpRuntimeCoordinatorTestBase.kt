@@ -65,6 +65,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
     protected val catalogs = MutableStateFlow<Map<McpCatalogKey, McpCatalogSnapshot>>(emptyMap())
     protected val catalogStore = mockk<McpCatalogStore>()
     protected lateinit var networkOnline: MutableStateFlow<Boolean>
+    protected val foreground = MutableStateFlow(true)
     protected var foregroundAction: (() -> Unit)? = null
     protected lateinit var manager: McpRuntimeCoordinator
     protected lateinit var oauthCoordinator: McpOAuthCoordinator
@@ -79,6 +80,7 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         toolListChangedHandlers.clear()
         callToolGate = null
         foregroundAction = null
+        foreground.value = true
         callToolResponder = { CallToolResult(content = listOf(TextContent("tool-result"))) }
         listToolsResponder = { _, _ -> ListToolsResult(tools = listOf(serverTool("search"))) }
         effective.snapshot = snapshotOf(emptyList())
@@ -141,7 +143,8 @@ internal abstract class McpRuntimeCoordinatorTestBase {
             appScope = AppScope(dispatcher),
             artifactStore = mockk<ArtifactStore>(relaxed = true),
             networkMonitor = networkMonitor,
-            foregroundObserver = ForegroundObserver { },
+            foregroundObserver = ForegroundObserver { foregroundAction = it },
+            foregroundState = foreground,
             ioDispatcher = dispatcher,
             transportOverride = { FakeTransport().also(createdTransports::add) },
             clientOverride = { config -> fakeClient(config) },

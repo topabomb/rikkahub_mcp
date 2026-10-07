@@ -20,13 +20,6 @@ sealed class McpStatus {
         val maintenance: Boolean = false,
     ) : McpStatus()
     data object WaitingNetwork : McpStatus()
-    data object CatalogRejectedEmpty : McpStatus()
-    data class CatalogStale(
-        val lastKnownGoodCount: Int,
-        val catalogRevision: Long,
-        val message: String?,
-    ) : McpStatus()
-
     /**
      * 连接/同步出错。
      *

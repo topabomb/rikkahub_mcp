@@ -28,6 +28,84 @@ import me.rerere.common.configuration.ConfigurationReference
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class McpQueryServiceTest {
+    @Test
+    fun `scoped query merges connection directory and notification diagnostics without substituting another session`() = kotlinx.coroutines.test.runTest {
+        val original = exampleEnterprisePackage()
+        val resource = original.configuration.mcpServers.first().copy(
+            toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALL, allowedTools = emptyList(),
+        )
+        val packet = original.copy(configuration = original.configuration.copy(mcpServers = listOf(resource)))
+        val access = RealmAccess.Enterprise(packet.identity.scope, "original-session")
+        val replacement = access.copy(sessionId = "replacement-session")
+        val document = UserSettingsDocument.empty()
+        val enterprise = appliedConfiguration(packet)
+        val resolved = ConfigurationResolver.resolve(document, access.scope, enterprise)
+        val snapshot = ExecutionConfigurationSnapshot(document.personalSettings(), resolved, "user")
+        val id = packet.identity.reference(resource.id)
+        val tool = McpCatalogTool("read", inputSchema = buildJsonObject { put("type", "object") })
+        val catalog = McpCatalogSnapshot(access.scope, id, 7, "definition", "confirmed-directory", listOf(tool),
+            McpManagedCatalog(packet.configuration.generation))
+        val connectionError = McpStatus.Error("Connection failed", "ConnectException: original connection cause\n at connectionOwner")
+        val refreshError = McpStatus.Error("Directory refresh failed", "IOException: original tools/list cause\n at catalogOwner")
+        val notificationError = McpStatus.Error("Updates unavailable", "JsonDecodingException: original event cause\n at notificationOwner")
+        val live = McpRuntimeCapability(McpStatus.Ready(1, 7), catalog, true,
+            catalogRefresh = McpCatalogRefresh.Failed(refreshError),
+            notifications = McpNotificationHealth.Unavailable(notificationError, retryable = false))
+        val disconnected = McpRuntimeCapability(connectionError, catalog, false)
+        val foreign = McpRuntimeCapability(McpStatus.Error("Replacement error", "replacement-session private diagnosis"), catalog, false)
+        val runtimeViews = kotlinx.coroutines.flow.MutableStateFlow(mapOf(
+            McpRuntimeKey(id, access, "interaction-live") to live,
+            McpRuntimeKey(id, access, "interaction-disconnected") to disconnected,
+            McpRuntimeKey(id, replacement, "interaction-other") to foreign,
+        ))
+        val coordinator = io.mockk.mockk<McpRuntimeCoordinator>()
+        io.mockk.every { coordinator.runtimeCapabilities } returns runtimeViews
+        io.mockk.every { coordinator.catalogs } returns kotlinx.coroutines.flow.MutableStateFlow(mapOf(catalog.key to catalog))
+        // The coordinator owns filtering. This test proves the query preserves the original
+        // Session when asking for that projection, despite global updates from other sessions.
+        io.mockk.coEvery { coordinator.readCatalogCapabilities(access, snapshot) } returns
+            mapOf(id to McpCatalogCapability(catalog, listOf(live, disconnected)))
+        io.mockk.coEvery { coordinator.readCatalogCapabilities(replacement, snapshot) } returns
+            mapOf(id to McpCatalogCapability(catalog, listOf(foreign)))
+        val queries = io.mockk.mockk<ConfigurationQueryService>()
+        io.mockk.every { queries.observe(access.scope) } returns kotlinx.coroutines.flow.MutableStateFlow(resolved)
+        io.mockk.coEvery { queries.readExecution(access) } returns snapshot
+        io.mockk.coEvery { queries.readExecution(replacement) } returns snapshot
+        val sessions = io.mockk.mockk<EnterpriseSessionController>()
+        io.mockk.every { sessions.state } returns kotlinx.coroutines.flow.MutableStateFlow<EnterpriseState>(enterprise)
+        val appScope = net.weero.measix.pilot.AppScope(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+        try {
+            val query = McpQueryService(io.mockk.mockk(), coordinator, queries, sessions, appScope)
+            val seen = mutableListOf<McpCatalogReadState>()
+            val other = mutableListOf<McpCatalogReadState>()
+            val originalCollector = backgroundScope.launch { query.observe(access).collect { seen += it } }
+            val replacementCollector = backgroundScope.launch { query.observe(replacement).collect { other += it } }
+            runCurrent()
+            val row = (seen.single() as McpCatalogReadState.Available).servers.single { it.serverId == id }
+            assertEquals(access, row.access)
+            assertEquals(live.status, row.status)
+            assertTrue(row.sessionCallable)
+            assertTrue(row.connectionsPartiallyReady)
+            assertTrue(row.directoryConfirmed)
+            assertEquals(listOf(tool.name), row.tools.map { it.name })
+            assertTrue(row.tools.single().enabled)
+            assertEquals(live.catalogRefresh, row.catalogRefresh)
+            assertEquals(live.notifications, row.notifications)
+            val expected = listOf(connectionError.detail, refreshError.detail, notificationError.detail)
+                .filterNotNull().sorted().joinToString("\n\n")
+            assertEquals(expected, row.connectionDiagnostic)
+            assertFalse(requireNotNull(row.connectionDiagnostic).contains("replacement-session"))
+            val otherRow = (other.single() as McpCatalogReadState.Available).servers.single { it.serverId == id }
+            assertEquals(replacement, otherRow.access)
+            assertEquals((foreign.status as McpStatus.Error).detail, otherRow.connectionDiagnostic)
+            assertFalse(otherRow.sessionCallable)
+            io.mockk.coVerify(exactly = 1) { coordinator.readCatalogCapabilities(access, snapshot) }
+            io.mockk.coVerify(exactly = 1) { coordinator.readCatalogCapabilities(replacement, snapshot) }
+            originalCollector.cancel()
+            replacementCollector.cancel()
+        } finally { appScope.cancel(); runCurrent() }
+    }
+
     @Test fun `managed query and assistant picker show only effective reviewed subset and retain missing reasons`() {
         val original = exampleEnterprisePackage()
         val first = original.configuration.mcpServers.first()

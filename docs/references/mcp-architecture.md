@@ -111,6 +111,9 @@ POST 使用 Ktor streaming `execute` 作用域，在预读整个 body 之前执�
 本地修改集中在上述完整 JSON 解码、capture 释放、传输 I/O 所有权和不记录请求正文，移除未使用的上游构造/发送重载。
 `McpClientTransport` 持有自己的 I/O Job；初始化、POST 和 GET 都在该 Job 下运行，关闭必须取消并等待实际 I/O。
 GET 使用 streaming `prepareGet().execute`，不使用会在共享 HttpClient scope 留下任务的 SSE session builder。
+Streamable HTTP 的通知 GET 由 transport 独立持有，单次 POST 的恢复 GET 归该请求所有；并发恢复或取消一个请求
+不能替换通知监听或其他请求，关闭 transport 则等待全部实际 I/O 退出。通知通道以
+`McpNotificationStreamState` 单独报告健康；普通通知失败不冒充整个会话断开，401、企业业务错误和 428 仍进入原授权或终止链。
 SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 transport 的重复关闭仍等待同一 I/O owner，
 单个 transport 不关闭共享 HTTP client。个人 SSE 在 endpoint 前结束属于明确连接失败；
 传输内部取消不能伪装为 Runtime 调用者取消而留下 Connecting，仍须清理原连接并发布恢复状态。
@@ -135,6 +138,8 @@ socket，并以引用计数 lease 支持并发授权，不保存 token、MCP con
 token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 userinfo，且资源/issuer 精确匹配。PKCE、resource、canonical server URI 与 trust-boundary/revision CAS
 全部保留：callback 到达后、token 持久化前再次校验信任边界与 revision，旧回调不能写入新 definition。
 回调或 refresh 响应跨越任一信任边界变化时只能丢弃。重复启动授权必须先取消并等待旧 Job 完成，再推进 revision 后启动新流程。
+用户定义变更同时收敛个人维护连接和借用该定义的企业执行连接。清除授权先撤销所有这些连接的准入，
+等待原连接及通知 I/O 退出；旧企业连接不能继续携带已清除的用户凭据。新授权仍由用户定义 owner 提交。
 
 ### 目录持久化与版本
 
@@ -179,8 +184,10 @@ Gateway 的目录 digest 使用已验证的 canonical surface digest；仅 JSON 
 ### 运行状态发布
 
 `McpRuntimeCoordinator.runtimeCapabilities` 是 runtime 的唯一公开状态源；底层由 `McpRuntimeStateStore` 对每个键以一个 immutable
-`McpRuntimeCapability(status, catalog, sessionCallable)` 原子发布。Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime
-读写路径。status 可变化而 catalog 保持不变，这正是离线仍披露 LKG 工具的协议。
+`McpRuntimeCapability` 原子发布。`status` 只描述连接或授权阶段；`catalog` 是已确认目录；
+`sessionCallable` 是当前调用能力；`catalogRefresh` 描述目录刷新进行中、失败或个人空目录拒绝；
+`notifications` 描述通知订阅健康。目录刷新失败和通知中断可以同时存在，不覆盖连接状态或相互清除。
+Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime 读写路径。
 
 ## 3. 进程启动与按需激活
 
@@ -192,7 +199,8 @@ MCP 编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需�
 
 启动时先从 `McpCatalogStore` 恢复与当前 `definitionDigest` 匹配的 durable LKG。恢复目录不需要网络，也不会把全部
 已登记 server 排进连接队列。新对话开始时只激活该 Assistant 选择的 server；新建、重新启用或修改 definition 的
-server 会主动建立其自身连接。用户全局刷新显式激活全部 enabled server。
+server 会主动建立其自身连接。恢复目录后仍为 `Idle`，表示按需连接，不报告刷新失败。
+用户刷新个人服务显式激活全部 enabled 用户 server。
 
 每个 `McpRuntimeKey` 只有一个 `McpServerRuntime`。它持有 mutex、generation、client、已接受连接请求的 fingerprint 和各 operation Job；
 其子 scope 保留所有已接受的生命周期任务，取消或替换 Job 引用不会丢失尚未完成的清理。
@@ -230,12 +238,12 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 | 触发 | 行为 | 是否改变 Agent schema |
 | --- | --- | --- |
 | 首次无 LKG 的新对话 | 连接并完整发现，最多等待 20 秒 | 成功非空提交后加入当前 run；失败则本 run unavailable |
-| 用户下拉刷新 | 全部 enabled slot 执行真实 operation receipt | 成功提交后影响后续 run |
+| 工具栏刷新或列表下拉 | 全部 enabled 用户 slot 执行同一真实 operation receipt；补建退化的通知订阅 | 成功提交后影响后续 run |
 | 用户点击单 server 重试 | 强制重建该 slot 并等待真实 operation receipt | 成功提交后影响后续 run |
 | `notifications/tools/list_changed` | 350ms 去抖，同 slot single-flight，运行中通知合并为一次 follow-up | 成功提交后影响后续 run |
-| timeout、断网、5xx、transport close | 保留 LKG，进入同 slot 恢复调度 | 否 |
+| timeout、断网、5xx、transport close | 保留 LKG，进入同 slot 恢复调度；恢复后重验目录 | 失败不改变；恢复提交影响后续 run |
 | App 进入后台 / Doze | 暂停普通恢复，等待前台；不轮询 | 否 |
-| validated default network 恢复 / 回前台 | 仅恢复已激活且已断连的 runtime；健康 session 不执行 `tools/list` | 否 |
+| validated default network 恢复 / 回前台 | 唤醒已有恢复任务或恢复可重试的通知订阅；完整健康 session 不执行 `tools/list` | 订阅或连接恢复后的重验影响后续 run |
 | 用户禁用/删除/修改 definition | teardown、撤销旧 binding；删除时清理 durable catalog | 是 |
 | 用户禁用工具/收紧审批 | 调用前重验本地 policy | 后续 run 更新；旧 run 调用 fail-closed |
 
@@ -252,7 +260,7 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 - 4–8 次为 maintenance retry，ceiling 为 30/60/120/240/300 秒；每次实际等待在 ceiling 的 1/2 到 ceiling 之间；
 - offline 时挂起等待 `NetworkMonitor.isOnline`，background 时挂起等待前台 StateFlow；等待不消耗 attempt，不进行固定轮询；
 - 8 次耗尽后进入明确 Error，但 LKG 仍可见。下一次工具调用、validated network 变化、回前台、单 server 重试或手工刷新
-  会重置恢复预算并立即尝试；
+  会重置恢复预算；网络和前台触发仍遵守同一后台与网络等待门；
 - 401 进入授权状态；404/408/425/429/5xx 与 I/O 类错误可恢复；其他 4xx/协议/配置错误不做盲目重试；
 - 首次目录发现期间的 transport close 也进入同一恢复调度；握手后和目录刷新后的提交均复验
   当前 client、transport 与状态，关闭或授权期间的迟到结果不能发布 `Ready`；
@@ -265,10 +273,16 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 - 当前 SDK 的 `StreamableHttpError` 不暴露响应头，恢复调度尚不消费 `Retry-After`。
 
 Android default network 必须同时具备 `INTERNET + VALIDATED`；前后台和网络事件只唤醒同一有界恢复调度器。
+已有连接或恢复任务被合并，不因另一个触发而抢占重试等待。协调器逐 runtime 隔离过期企业租约，关闭原连接；
+其他异常保留诊断并终止该连接，不让单个企业连接的异常杀死全局网络观察。
+重连退避和目录刷新去抖结束后仍复验原授权；任务自身遇到准入异常时也撤销调用能力并等待原连接退出，
+不能只记录日志后遗留就绪或重试状态。清理按捕获的 generation 比较，旧任务失败不能退役新连接。
+通知重试耗尽可在前台恢复；坏 JSON 等非重试错误只由显式刷新重开。重新订阅成功后补做一次目录重验，
+普通 `tools/list` 成功不能清除仍断开的通知状态；不支持 GET 的服务器也不反复重开订阅。
 
 ## 7. Run 快照与调用结果
 
-Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：已有匹配 LKG 时立即捕获；仅缺目录的已选 server 才等待
+Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：个人与企业都先等待 Catalog 初始化并恢复匹配目录，已有匹配 LKG 时立即捕获；仅缺目录的已选 server 才等待
 其 AppScope operation，全部缺失项共享 20 秒上限。随后生成 immutable `TurnMcpCapabilitySnapshot`：
 
 ```text
@@ -324,7 +338,7 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 `McpRuntimeCapability` 同时原子发布 `catalog` 与由当前 client、transport、握手和调用准入阶段计算的
 `sessionCallable`。前者只表示已确认的工具目录，后者表示当前会话能否进入工具调用；聊天页“就绪”还要求
 至少一个本地启用的目录工具。断连后的 LKG 继续显示，但不计入就绪数量；设置页和选择器仍用目录存在性
-决定是否显示工具与 loading。`CatalogStale` 的不同原因由状态详情表达，调用能力以 `sessionCallable` 为准。
+决定是否显示工具与 loading。目录刷新与通知异常独立呈现，调用能力以 `sessionCallable` 为准。
 
 - 有 LKG 时，无论 Ready、Reconnecting、WaitingNetwork、RetryScheduled、NeedsAuthorization 或 Error，都显示真实工具数；
 - 只有首次无目录的 Connecting/Discovering/Authorizing 使用 spinner；maintenance recovery 使用静态状态和下次重试信息；
@@ -333,8 +347,9 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 - MCP 选择卡以名称、连接或准入状态和原开关为主，范围与固定绑定合并为次要说明；Ready 仅在 `sessionCallable` 为真时称工具可用，部分工具缺失或变更按数量汇总，不取目录的首项错误代表整个服务器。首次尚未发现目录使用中性提示，成功空目录与后台重连仍保持可区分；
 - 工具卡的“调用前确认”仅说明可执行工具的显式确认规则；契约变化提示管理员重新发布，两者不混用。只有实际存在描述或参数时提供展开动作；共享用户定义继续使用原启用与确认开关；
 - 企业服务器的目录展开按钮显示紧凑数字，首次未发现目录显示发布项数量，已确认目录显示启用/总量；读屏保留完整的本地化数量说明；
-- 共享用户定义的列表下拉刷新沿用个人连接维护；spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复。企业目录在首次执行时发现，页面只读展示已确认目录，不为浏览建立 interaction；
-- notification stream 单独退化时保留 command transport 与目录，并显示 stale/degraded 原因；前台或手工刷新补齐遗漏；
+- 工具栏刷新图标与个人、企业列表下拉共用同一命令，刷新中禁用重复触发；图标的无障碍说明为“刷新我的 MCP”，列表不另占一行放按钮。spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复。企业目录在首次执行时发现，页面只读展示已确认目录，不为浏览或下拉建立 interaction；
+- 用户服务卡片的名称使用紧凑标题；传输类型和正常状态合成摘要，工具数量不重复堆叠为彩色标签。异常时保留目录计数，将状态说明和诊断入口放在同一行；来源标签只在跨域管理时显示；
+- 未激活显示“使用时连接”；恢复缓存显示已保存工具数量，不用失败文案。notification stream 单独退化时保留 command transport 与目录，说明自动更新中断；刷新失败说明保留已确认目录，完整诊断可展开；
 - 来源、当前域准入、强制启用、Gateway policy 与工具目录由同一 presentation 提供，Compose 不直连 Manager/Store。
 
 `userServers` 明确用于共享用户定义管理，保留原 OAuth、工具策略和编辑入口，并说明跨空间影响。
@@ -343,9 +358,9 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 读取失败发布 `McpCatalogReadState.Unavailable`，之后的 owner 变化可以恢复观察；私有 Applied revision 单独唤醒读取。
 选中目录在选择变化时先清空，停止订阅后不保留旧企业 replay，重开先重新授权。
 `McpCatalogCapability` 保留同一资源、原 Session 和定义摘要匹配的全部连接，个人维护连接不借给企业投影。
-`McpQueryService` 只读汇总：没有连接显示未连接；存在可调用连接时显示就绪，只有部分可调用时显示部分连接就绪。
+`McpQueryService` 只读汇总：没有连接显示使用时连接；存在可调用连接时显示就绪，只有部分可调用时显示部分连接就绪。
 全部不可调用时优先保留授权或失败提示，其次显示正在连接、重试和等待网络；多个重试显示最近的一次。
-错误详情合并并保留原诊断，已确认工具目录独立显示。该汇总不写回 Runtime，也不代替任何 interaction 的调用准入。
+错误详情合并连接、刷新及通知的原诊断，已确认工具目录独立显示。该汇总不写回 Runtime，也不代替任何 interaction 的调用准入。
 个人与企业选择器使用相同状态图标：未连接使用断开的链条，就绪使用 MCP 图标，后台连接或重试使用时钟，失败或待授权使用警示图标。
 
 企业 MCP 卡片没有编辑、删除、关闭、OAuth 或单工具策略入口；用户定义始终可管理，企业准入被禁止时显示原因。

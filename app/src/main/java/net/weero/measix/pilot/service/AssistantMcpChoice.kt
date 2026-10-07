@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogRefresh
+import net.weero.measix.pilot.data.ai.mcp.McpNotificationHealth
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.configuration.ConfigurationCategory
 import net.weero.measix.pilot.data.configuration.ConfigurationUnavailableReason
@@ -21,6 +23,8 @@ internal data class AssistantMcpChoice(
     val directoryConfirmed: Boolean = false,
     val connectionsPartiallyReady: Boolean = false,
     val connectionDiagnostic: String? = null,
+    val catalogRefresh: McpCatalogRefresh = McpCatalogRefresh.Idle,
+    val notifications: McpNotificationHealth = McpNotificationHealth.NotEstablished,
 ) {
     val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
     val isCallable: Boolean get() = unavailableReason == null && sessionCallable && tools.any { it.enabled }
@@ -49,7 +53,8 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
             status?.status ?: McpStatus.Idle, status?.sessionCallable == true,
             tools, id in fixedMcpBindings, status?.allowsAllTools,
             if (id in fixedMcpBindings) names == null else null, status?.directoryConfirmed == true,
-            status?.connectionsPartiallyReady == true, status?.connectionDiagnostic)
+            status?.connectionsPartiallyReady == true, status?.connectionDiagnostic,
+            status?.catalogRefresh ?: McpCatalogRefresh.Idle, status?.notifications ?: McpNotificationHealth.NotEstablished)
     }
 }
 
@@ -59,5 +64,6 @@ internal fun List<McpServerPresentation>.assistantChoices(assistant: Assistant):
         if (server.enabled) null else ConfigurationUnavailableReason.RESOURCE_DISABLED,
         server.status, server.sessionCallable, server.tools,
         directoryConfirmed = server.directoryConfirmed,
-        connectionsPartiallyReady = server.connectionsPartiallyReady, connectionDiagnostic = server.connectionDiagnostic)
+        connectionsPartiallyReady = server.connectionsPartiallyReady, connectionDiagnostic = server.connectionDiagnostic,
+        catalogRefresh = server.catalogRefresh, notifications = server.notifications)
 }

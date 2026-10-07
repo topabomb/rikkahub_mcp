@@ -116,9 +116,14 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |
 | Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
 | HTTP ASR 上传 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest`；模拟器底噪不满足有效信号，跳过不算上传成功 |
+| MCP 目录冷启动 | `McpLifecycleUiAndroidTest#confirmedDirectoryRestoresWithoutFailureAfterProcessRestart`，先 `mcpColdSeed=true`，停止目标进程后再 `mcpColdVerify=true` | 同一专用设备保留安装和数据；真实 Catalog 持久化与正式设置页，HTTP 为本地 fixture |
 
 Gradle 参数用 `'-Pandroid.testInstrumentationRunnerArguments.<name>=<value>'`，避免 PowerShell 拆分。
 缺 Rootfs fixture 明确跳过；ASR 录音中取消与准入撤销可独立于完整上传验证。
+`McpLifecycleUiAndroidTest` 的普通用例通过真实 HTTP/SSE、Koin owners 和正式设置页验证连接、刷新失败保留目录、
+通知退化仍能调用及显式恢复，并保存截图。冷启动两阶段用直接 instrumentation 运行，阶段之间不能卸载包；
+验证阶段删除自己创建的配置、目录及 marker。`SettingMcpPageAndroidTest` 的企业暗色大字体截图使用受控 query 投影，
+只证明界面呈现，不代替真实 Core 接入或企业执行授权测试。
 旧/当前客户端的 Core 兼容探针由 [兼容性验证工具](../../tools/compatibility/README.md)维护，入口是
 `PlatformSnapshotCompatibilityLiveAndroidTest`。旧 APK 使用其固定提交和独立探针，不能换用当前 DTO 声称覆盖旧客户端；
 版本故障注入不等于 Core 正式发布。

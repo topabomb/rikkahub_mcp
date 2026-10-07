@@ -13,6 +13,7 @@ import me.rerere.hugeicons.stroke.AlertCircle
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Camera01
+import me.rerere.hugeicons.stroke.Refresh
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.Unlink01
@@ -42,6 +43,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.FlowRowOverflow
@@ -105,7 +107,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
@@ -141,6 +142,9 @@ import net.weero.measix.pilot.data.ai.mcp.McpParseResult
 import net.weero.measix.pilot.data.ai.mcp.McpRefreshReceipt
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpCommonOptions
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogRefresh
+import net.weero.measix.pilot.data.ai.mcp.McpNotificationHealth
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.mcp.McpToolPolicy
 import net.weero.measix.pilot.service.McpApplicationService
@@ -279,6 +283,15 @@ internal fun SettingMcpPage(
                     BackButton()
                 },
                 actions = {
+                    val refreshDescription = stringResource(R.string.mcp_refresh_personal)
+                    IconButton(
+                        onClick = refreshMcpServers,
+                        enabled = !userRefreshRunning && mcpConfigs.any { it.commonOptions.enable },
+                        modifier = Modifier.semantics { contentDescription = refreshDescription },
+                    ) {
+                        if (userRefreshRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(HugeIcons.Refresh, null)
+                    }
                     IconButton(
                         onClick = {
                             showImportMethodDialog = true
@@ -304,21 +317,7 @@ internal fun SettingMcpPage(
         val scope = pageScope
         val state = rememberPullToRefreshState()
         val layoutDirection = LocalLayoutDirection.current
-        PullToRefreshBox(
-            isRefreshing = userRefreshRunning,
-            onRefresh = refreshMcpServers,
-            indicator = {
-                PullToRefreshDefaults.Indicator(
-                    state = state,
-                    isRefreshing = userRefreshRunning,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .offset(y = innerPadding.calculateTopPadding()),
-                )
-            },
-            state = state,
-            modifier = Modifier.fillMaxSize()
-        ) {
+        val content: @Composable BoxScope.() -> Unit = {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize(),
@@ -372,7 +371,7 @@ internal fun SettingMcpPage(
                         key(selection) { ManagedMcpServerItem(server, selection, configurationCommands) }
                     }
                 }
-                if (managedServers.isNotEmpty() && mcpConfigs.isNotEmpty()) {
+                if (catalog?.selection?.access is RealmAccess.Enterprise && mcpConfigs.isNotEmpty()) {
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.mcp_user_definitions), style = MaterialTheme.typography.titleMedium)
@@ -432,6 +431,22 @@ internal fun SettingMcpPage(
                 }
             }
         }
+        PullToRefreshBox(
+            isRefreshing = userRefreshRunning,
+            onRefresh = refreshMcpServers,
+            indicator = {
+                PullToRefreshDefaults.Indicator(
+                    state = state,
+                    isRefreshing = userRefreshRunning,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = innerPadding.calculateTopPadding()),
+                )
+            },
+            state = state,
+            modifier = Modifier.fillMaxSize(),
+            content = content,
+        )
     }
     McpServerConfigModal(creationState, mcpApplicationService::upsert)
     McpServerConfigModal(editState, mcpApplicationService::upsert)
@@ -540,19 +555,20 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
             server.unavailableReason?.let {
                 Text(configurationUnavailableText(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            if (server.unavailableReason == null && (server.status !is McpStatus.Ready || server.tools.isEmpty() || server.connectionsPartiallyReady)) {
+            if (server.unavailableReason == null && (server.status !is McpStatus.Ready || server.tools.isEmpty() || server.connectionsPartiallyReady ||
+                server.catalogRefresh != McpCatalogRefresh.Idle || server.notifications is McpNotificationHealth.Unavailable)) {
                 val diagnostic = server.connectionDiagnostic ?: (server.status as? McpStatus.Error)?.let { it.detail ?: it.message ?: failureText }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (server.isBusy) CircularProgressIndicator(Modifier.size(20.dp))
                     Text(
                         modifier = Modifier.weight(1f),
                         text = mcpServerStatusText(server.status, server.tools, server.directoryConfirmed, server.sessionCallable,
-                            server.connectionsPartiallyReady),
+                            server.connectionsPartiallyReady, server.catalogRefresh, server.notifications),
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = if (server.status is McpStatus.Error) 3 else Int.MAX_VALUE,
                         overflow = TextOverflow.Ellipsis,
                         color = if (server.status is McpStatus.Error || server.status == McpStatus.NeedsAuthorization ||
-                            server.status == McpStatus.CatalogRejectedEmpty) MaterialTheme.colorScheme.error
+                            server.catalogRefresh == McpCatalogRefresh.RejectedEmpty) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     diagnostic?.let {
@@ -633,16 +649,14 @@ private fun McpServerItem(
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
-                is McpStatus.Ready -> Icon(if (presentation?.sessionCallable == true) HugeIcons.McpServer else HugeIcons.Unlink01, null)
+                is McpStatus.Ready -> Icon(if (presentation?.notifications is McpNotificationHealth.Unavailable || presentation?.catalogRefresh is McpCatalogRefresh.Failed) HugeIcons.AlertCircle else if (presentation?.sessionCallable == true) HugeIcons.McpServer else HugeIcons.Unlink01, null)
                 is McpStatus.Reconnecting -> if (status.maintenance || presentation?.hasCatalogTools == true) {
                     Icon(HugeIcons.Clock02, null)
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
                 is McpStatus.RetryScheduled,
-                McpStatus.WaitingNetwork,
-                is McpStatus.CatalogStale -> Icon(HugeIcons.Clock02, null)
-                McpStatus.CatalogRejectedEmpty,
+                McpStatus.WaitingNetwork -> Icon(HugeIcons.Clock02, null)
                 is McpStatus.Error -> Icon(HugeIcons.AlertCircle, null)
                 McpStatus.NeedsAuthorization -> Icon(HugeIcons.AlertCircle, null)
                 McpStatus.Authorizing -> if (presentation?.hasCatalogTools == true) {
@@ -654,7 +668,7 @@ private fun McpServerItem(
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -662,80 +676,53 @@ private fun McpServerItem(
                 ) {
                     Text(
                         text = item.commonOptions.name,
-                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleMedium,
                     )
                     if (presentation?.scope is ConfigurationScope.Enterprise) {
                         Tag(type = TagType.INFO) { Text(stringResource(R.string.managed_configuration_source_local)) }
                     }
-                    presentation?.unavailableReason?.let { reason ->
-                        Tag(type = TagType.WARNING) { Text(configurationUnavailableText(reason)) }
-                    }
-                    val dotColor =
-                        if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .drawWithContent {
-                                drawCircle(
-                                    color = dotColor
-                                )
-                            }
-                    )
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Tag(type = TagType.SUCCESS) {
-                        when (item) {
-                            is McpServerConfig.SseTransportServer -> Text("SSE")
-                            is McpServerConfig.StreamableHTTPServer -> Text("Streamable HTTP")
+                val summary = when {
+                    !item.commonOptions.enable -> stringResource(R.string.configuration_reason_disabled)
+                    presentation?.unavailableReason != null -> configurationUnavailableText(presentation.unavailableReason)
+                    presentation != null -> mcpServerStatusText(status, presentation.tools, presentation.directoryConfirmed,
+                        presentation.sessionCallable, presentation.connectionsPartiallyReady,
+                        presentation.catalogRefresh, presentation.notifications)
+                    else -> stringResource(R.string.mcp_status_on_demand)
+                }
+                val inlineStatus = !item.commonOptions.enable || presentation?.unavailableReason != null || status == McpStatus.Idle ||
+                    (status is McpStatus.Ready && presentation?.catalogRefresh == McpCatalogRefresh.Idle &&
+                        presentation.notifications !is McpNotificationHealth.Unavailable && !presentation.connectionsPartiallyReady)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(if (item is McpServerConfig.SseTransportServer) "SSE" else "Streamable HTTP",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val metadata = if (inlineStatus) summary else presentation?.takeIf { it.directoryConfirmed }?.let {
+                        stringResource(R.string.mcp_enabled_tools_count, it.tools.count { tool -> tool.enabled }, it.tools.size)
+                    }
+                    if (metadata != null) {
+                        Text("·", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(metadata, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    item.commonOptions.oauth?.takeIf { it.enabled }?.let { oauth ->
+                        Icon(HugeIcons.ShieldKey, null, Modifier.size(16.dp),
+                            tint = if (oauth.isAuthorized) MaterialTheme.extendColors.green6 else MaterialTheme.colorScheme.error)
+                    }
+                }
+                if (!inlineStatus && status !is McpStatus.Error && status != McpStatus.NeedsAuthorization) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        presentation?.connectionDiagnostic?.let { detail ->
+                            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                                DiagnosticDisclosure(detail = detail, title = item.commonOptions.name,
+                                    label = stringResource(R.string.mcp_connection_details),
+                                    contentPadding = PaddingValues(horizontal = 4.dp))
+                            }
                         }
                     }
-                    val oauthState = item.commonOptions.oauth
-                    if (oauthState?.enabled == true) {
-                        Icon(
-                            imageVector = HugeIcons.ShieldKey,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = if (oauthState.isAuthorized) MaterialTheme.extendColors.green6
-                                   else MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                if (presentation?.hasCatalogTools == true) {
-                    val enabledToolCount = presentation.tools.count { it.enabled }
-                    Tag(type = TagType.INFO) {
-                        Text(
-                            stringResource(
-                                R.string.mcp_enabled_tools_count,
-                                enabledToolCount,
-                                presentation.tools.size,
-                            )
-                        )
-                    }
-                }
-                when (status) {
-                    McpStatus.Discovering -> Text(
-                        stringResource(R.string.mcp_status_discovering),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    McpStatus.WaitingNetwork -> Text(
-                        stringResource(R.string.mcp_status_waiting_network),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    McpStatus.CatalogRejectedEmpty -> Text(
-                        stringResource(R.string.mcp_status_catalog_rejected_empty),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    is McpStatus.CatalogStale -> Text(
-                        stringResource(R.string.mcp_status_catalog_stale, status.lastKnownGoodCount),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    else -> Unit
                 }
                 if (status is McpStatus.Error) {
                     val error = status
@@ -759,40 +746,6 @@ private fun McpServerItem(
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
-                }
-                if (status is McpStatus.Reconnecting) {
-                    Text(
-                        text = if (status.maintenance) {
-                            stringResource(R.string.mcp_status_maintenance_reconnecting)
-                        } else {
-                            stringResource(R.string.mcp_status_reconnecting, status.attempt, status.maxAttempts)
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (status is McpStatus.RetryScheduled) {
-                    Text(
-                        text = if (status.maintenance) {
-                            stringResource(
-                                R.string.mcp_status_maintenance_retry,
-                                (status.retryInMs / 1000).toInt(),
-                            )
-                        } else {
-                            stringResource(
-                                R.string.mcp_status_retry_scheduled,
-                                status.attempt,
-                                status.maxAttempts,
-                                (status.retryInMs / 1000).toInt(),
-                            )
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
                 }
                 if (status == McpStatus.NeedsAuthorization) {
                     val context = LocalContext.current
