@@ -51,7 +51,7 @@ System
 | `char`、`description` | 助手名称与描述；空名称使用 `assistant` |
 | `user` / `nickname` | 用户昵称，空值使用 `user` |
 | `model_name`、`model_id` | 模型显示名与模型 ID |
-| `cur_date` | 捕获时的本地日期；旧 `cur_time` / `cur_datetime` 同样使用日期值 |
+| `cur_date` | START 捕获的本地日期；未定义占位符保持原文 |
 | `locale`、`timezone` | 捕获的语言与时区显示名 |
 | `system_version`、`device_info` | Android 版本、设备品牌与型号 |
 
@@ -109,7 +109,8 @@ Seed 保留企业绑定顺序。Seed 的 ID 是企业资源引用，不是 `memo
 ```
 
 背景块的 `id` 只用于配置身份，模型不接收 `id`、`title` 或 `format`；界面按顺序生成背景编号。
-空背景不构造包。背景置于适用窗口首个真实 USER 的原输入 parts 前；与新状态披露定位到同一 USER 时，
+空背景不构造包。背景置于窗口中首个真实 USER 的原输入 parts 前；没有真实 USER 时使用首个带应用来源的 USER，
+仍保留独立 Starter 来源。与新状态披露定位到同一 USER 时，
 披露先于背景，时间提醒位于该 USER 前。背景为字面数据，不执行占位符或消息模板。
 
 手动摘要使用 `{"type":"conversation_history_summary","content":"…"}`，
@@ -255,8 +256,9 @@ Settings 只保存选择及工具策略，不保存远端 Schema。完整 Schema
 
 ## 5. 工具错误返回协议
 
-`ToolErrorProtocol` 定义工具失败的公共 JSON 信封，放在 Text part 中；成功结果保留领域形状。durable 终态由 `ToolResultStatus`
-和执行记录决定，不能只从结果正文推断执行是否发生。
+`ToolErrorProtocol` 定义当前工具参数校验、准备与执行失败的公共 JSON 信封，放在 Text part 中；成功结果保留领域形状。
+Turn 中断与启动恢复合成的回放占位沿既有终态协议保存，可能使用 `error` 字段而非本节信封；
+是否可回放及副作用是否确定仍由 `ToolResultStatus` 和 execution 判断，不能只从正文推断执行是否发生。
 
 ```json
 {"status":"failed","reason":"memory_not_found_in_namespace","detail":"Memory 111 does not exist in the current namespace. Do not retry this ID unchanged."}
@@ -268,8 +270,8 @@ Settings 只保存选择及工具策略，不保存远端 Schema。完整 Schema
 | reason | 必有且稳定的小写下划线代码，只表达已确认类别，不使用异常 message 或动态资源名充当代码 |
 | detail | 仅在修正动作或异常诊断需要时提供；App 生成值须非空、单行，先脱敏和压平空白，再限制为 128 个 Unicode code point（含省略号） |
 
-领域字段可与公共字段并存，如 Shell stderr、子助手摘要，但不能覆盖公共语义。App 不另建
-error/type/message 平行字段；远端 MCP 正文不受本地 detail 长度限制。
+领域字段可与公共字段并存，如 Shell stderr、子助手摘要，但不能覆盖公共语义。
+使用本节信封的工具不另建 error/type/message 平行字段；远端 MCP 正文不受本地 detail 长度限制。
 参数纯校验在审批前返回同一信封，不创建 execution；用户拒绝和 ask_user 回答使用 typed interaction 终态。
 取消向上传播，不生成失败结果。
 

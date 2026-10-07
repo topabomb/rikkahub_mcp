@@ -76,7 +76,7 @@ Assistant 级 custom body 可随默认模型和 Provider override 切换协议�
 
 ### 工具 JSON Schema 边界
 
-`Tool.parameters` 与目录中的 `McpCatalogTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP SDK 的 `ToolSchema` 会整体序列化，因而保留 JSON Schema 2020-12 的 `$schema`、`$defs`、`$ref`、`properties` 和 `required`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。
+`Tool.parameters` 与目录中的 `McpCatalogTool.inputSchema` 都使用完整 `JsonObject` 作为规范表示。MCP 目录由 `McpCatalogWire` 捕获原始响应，`McpCatalogTool` 保全完整定义，工具工厂直接投影 `inputSchema`；通用层不使用封闭数据类枚举关键字，也不按 host 删除定义。
 
 OpenAI Chat Completions、Responses 和 Anthropic Messages 直接发送该文档。Gemini 使用官方的 `parametersJsonSchema` 字段，并移除该字段不接受的 `$schema` 方言声明；其余定义和引用保持原样。Provider 差异只能在对应协议 Adapter 处理，不能回写或降级通用缓存。
 
@@ -90,17 +90,8 @@ OpenAI-compatible 端点要求 function tool 的 `parameters` 至少是 object s
 
 ## 统一消息模型
 
-`UIMessage` 是协议无关的持久化中间表示：
-
-```text
-UIMessage
-├─ role
-├─ parts: Step / Text / Reasoning / Image / Document / Audio / Video / Tool
-├─ providerMetadata: MessageMetadata
-├─ terminalStatus / terminalReason / terminalDetail
-├─ providerReplayProjection: ProviderReplayProjection?  (request-only, @Transient, 不持久化)
-└─ createdAt / finishedAt / usage
-```
+`UIMessage` 保存协议无关的持久消息、显式 Step、媒体与 typed Tool；Provider metadata 保存必要的原协议回放状态。
+字段以类型声明为准，request-only 投影不成为持久事实。
 
 终态 Assistant 的 `replaySafeProjection()` 按显式 Step 保留连续的完整前缀。Step 必须为 `Continue` 或 `Final`、
 具有 `modelResult`，且整批 Tool 都有匹配的 `stepId`、合法调用 envelope 和 typed replay Result；任一条件不满足即结束完整前缀。
@@ -176,18 +167,11 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 
 ## Chat Completions
 
-`ChatCompletionsAPI` 负责：
-
-- system/developer/user/assistant/tool 角色映射；
-- 文本、图片、推理、拒答、生成图片与 Tool parts 的序列化和解析；
-- `tool_calls[].index` 对并行工具参数 delta 的关联；
-- 单请求 usage 与已识别 endpoint 缓存字段的归一化；
-- endpoint/model 特定的 reasoning、temperature、token limit 和 stream 参数；
-- `ChatReasoningReplayPolicy` 的唯一解析与消费（`resolveChatReasoningReplayPolicy()`）。
+`ChatCompletionsAPI` 负责该 wire 的角色/part 编解码、流式槽与 endpoint 参数适配。
 
 ### System role 与 token limit
 
-官方 OpenAI reasoning 模型需要 developer role 时由 `useDeveloperRoleForSystemMessages` 决定；兼容服务默认保持 system role。官方 endpoint 使用 `max_completion_tokens`，兼容服务仍使用 `max_tokens`。
+官方 OpenAI reasoning 模型需要 developer role 时由 `useDeveloperRoleForSystemMessages` 决定；兼容服务默认保持 system role。官方 OpenAI 与已识别 MiMo 端点使用 `max_completion_tokens`，其他兼容端点使用 `max_tokens`。
 
 ### Reasoning effort
 

@@ -31,16 +31,9 @@ ChatDrawer 组合
   -> 展示更新卡片或保持隐藏
 ```
 
-设置页把开关改成 7/14/21 天暂停对话框。暂停到期后抽屉会重新组合 `UpdateCard`。旧的 `showUpdates=false` 仍视为关闭，点“立即恢复”会写回 `showUpdates=true` 并清空暂停时间。检查流仍由单例 `UpdateChecker` 负责，不按会话重建。
+设置页把开关改成 7/14/21 天暂停对话框。暂停到期后抽屉会重新组合 `UpdateCard`。旧的 `showUpdates=false` 仍视为关闭，点“立即恢复”会写回 `showUpdates=true` 并清空暂停时间。恢复提示只重新订阅同一进程结果；本进程已检查时不再次发起网络请求。
 
-请求使用全局 `OkHttpClient`，在 `Dispatchers.IO` 上执行。User-Agent 形状为：
-
-```text
-MeasixPilot <VERSION_NAME> #<VERSION_CODE>
-```
-
-远程 JSON 的 `UpdateInfo` 包含版本、发布时间、changelog 和下载项；每项 `UpdateDownload`
-包含展示名称、URL 与大小字符串。类型和默认值由 `UpdateChecker.kt` 维护。
+请求使用全局 `OkHttpClient`，在 `Dispatchers.IO` 上执行；`UpdateChecker` 定义远程版本、发布时间、说明与下载项。
 
 未知 JSON 字段会被忽略；HTTP 非成功状态、网络异常或反序列化失败都转换为 `UiState.Error`，不影响聊天功能。
 
@@ -135,15 +128,3 @@ keyPassword=<password>
 - `lint` 与 `assembleDebug`。
 
 正式发版还必须验证 Release 构建、所有 APK 签名、版本号、ABI 产物、changelog 提取结果、`repository_dispatch` 触发成功以及线上 `version.json` 内容正确。GitHub Actions 成功不替代真实安装与升级验证。
-
-## 8. 关键架构文件
-
-| 边界 | 文件 |
-| --- | --- |
-| 检查 owner 与版本解析 | `app/src/main/java/net/weero/measix/pilot/utils/UpdateChecker.kt` |
-| 安装来源过滤 | `app/src/main/java/net/weero/measix/pilot/utils/PlayStoreUtil.kt`、`ui/hooks/PlayStore.kt` |
-| UI 投影 | `app/src/main/java/net/weero/measix/pilot/ui/components/ui/UpdateCard.kt` |
-| 忽略版本持久化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
-| Android 版本与 Release 构建 | `app/build.gradle.kts` |
-| 发行工作流 | `.github/workflows/release.yml` |
-| 用户可见版本说明 | `docs/dev/changelog.md` |

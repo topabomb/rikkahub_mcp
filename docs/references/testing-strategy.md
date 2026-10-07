@@ -115,11 +115,11 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |
 | Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
-| HTTP ASR 上传 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest`；模拟器底噪不满足有效信号，跳过不算上传成功 |
+| HTTP ASR 控制器录音与交接 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest` 使用转写替身，证明 WAV、有效信号、取消与清理，不证明真实 HTTP 上传或服务器识别 |
 | MCP 目录冷启动 | `McpLifecycleUiAndroidTest#confirmedDirectoryRestoresWithoutFailureAfterProcessRestart`，先 `mcpColdSeed=true`，停止目标进程后再 `mcpColdVerify=true` | 同一专用设备保留安装和数据；真实 Catalog 持久化与正式设置页，HTTP 为本地 fixture |
 
 Gradle 参数用 `'-Pandroid.testInstrumentationRunnerArguments.<name>=<value>'`，避免 PowerShell 拆分。
-缺 Rootfs fixture 明确跳过；ASR 录音中取消与准入撤销可独立于完整上传验证。
+缺 Rootfs fixture 明确跳过；ASR 录音取消与准入撤销可独立验证，真实上传和识别另需服务端证据。
 `McpLifecycleUiAndroidTest` 的普通用例通过真实 HTTP/SSE、Koin owners 和正式设置页验证连接、刷新失败保留目录、
 通知退化仍能调用及显式恢复，并保存截图。冷启动两阶段用直接 instrumentation 运行，阶段之间不能卸载包；
 验证阶段删除自己创建的配置、目录及 marker。`SettingMcpPageAndroidTest` 的企业暗色大字体截图使用受控 query 投影，
@@ -154,6 +154,25 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 每次交付记录源码/构建身份、设备和 ABI、报告、失败与跳过原因，以及实际 Core/Provider 身份。
 设备、真实服务、声学输入与生产环境分别说明；参考文档维护验证方法，不累计历史通过数量。
 
+### 文件预览设备场景
+
+`MediaPreviewAndroidTest` 使用项目内的短 MP4 验证解码、原生控制条、拖动、全屏返回、后台停止及撤权；
+4 GiB 稀疏 MP4 将真实媒体数据放到超过 2 GiB 的偏移，验证 Long 寻址与有界读取，不代表 4 GiB 网络吞吐或持续播放测试。
+图片查看器、静态 SVG 验证和 `EditorInputConnectionAndroidTest` 分别覆盖图片操作、解析边界与原生惯性/查找/跳行。
+编辑器的键盘缩放断言显式使用停靠键盘，并在 finally 恢复原手写模式；浮动手写 IME 可见但底部 inset 为零，不代表正文应缩短。
+这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
+
+`RemoteMediaPreviewLiveAndroidTest` 使用已接入的专用设备，以 `remotePreviewLive=true` 显式启用；采用保留数据安装和直接
+instrumentation，不用会卸载应用的 connected 任务。测试通过原远程服务上传短 MP4，在真实文件页面检查播放、暂停拖动后的
+新画面、横竖屏、关闭释放和旧 ETag 拒绝。不得为了测试修改企业发布、助手绑定或工作卷容量。
+
+4 GiB 样本采用宿主协作：设备在 cache 写出 `remote-preview-sparse-request.json`，含本次 UUID 目录与原 `agentSpaceId`。
+宿主核对它与真实服务/运行环境身份一致后，通过官方 guest 执行入口运行测试资源 `media/sparse-preview.py`，参数是该目录的
+`short.mp4` 和 `four-gib.mp4`。脚本独占创建稀疏文件，实际媒体数据位于 3 GiB，不能从 Host 挂载运行中工作卷或覆盖原文件。
+成功后将目录名写入同 cache 的临时文件，再原子改名为 `remote-preview-sparse.done`；禁止预写回执。
+设备验证 4 GiB HEAD、跨 2 GiB 与末尾 Range 及真实解码，finally 删除本次目录与握手文件，将结果写入
+`remote-preview-live-evidence.json`。截图位于应用 external files。测试仍不代表完整 4 GiB 网络传输或高码率持续播放。
+
 ## 6. 性能证据
 
 性能入口为 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测冷启动，
@@ -183,22 +202,3 @@ AndroidX JSON 的 `sampledMetrics` 保留耗时与分配的原始 `runs` 及分�
 
 `.github/workflows/benchmark.yml` 仅供手动模拟器诊断，保留 JSON 与 trace，不设性能通过阈值。
 只有固定实机和系统下的结果适合与同环境 baseline 比较；有执行入口不代表已经采集基线。
-
-### 文件预览设备场景
-
-`MediaPreviewAndroidTest` 使用项目内的短 MP4 验证解码、原生控制条、拖动、全屏返回、后台停止及撤权；
-4 GiB 稀疏 MP4 将真实媒体数据放到超过 2 GiB 的偏移，验证 Long 寻址与有界读取，不代表 4 GiB 网络吞吐或持续播放测试。
-图片查看器、静态 SVG 验证和 `EditorInputConnectionAndroidTest` 分别覆盖图片操作、解析边界与原生惯性/查找/跳行。
-编辑器的键盘缩放断言显式使用停靠键盘，并在 finally 恢复原手写模式；浮动手写 IME 可见但底部 inset 为零，不代表正文应缩短。
-这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
-
-`RemoteMediaPreviewLiveAndroidTest` 使用已接入的专用设备，以 `remotePreviewLive=true` 显式启用；采用保留数据安装和直接
-instrumentation，不用会卸载应用的 connected 任务。测试通过原远程服务上传短 MP4，在真实文件页面检查播放、暂停拖动后的
-新画面、横竖屏、关闭释放和旧 ETag 拒绝。不得为了测试修改企业发布、助手绑定或工作卷容量。
-
-4 GiB 样本采用宿主协作：设备在 cache 写出 `remote-preview-sparse-request.json`，含本次 UUID 目录与原 `agentSpaceId`。
-宿主核对它与真实服务/运行环境身份一致后，通过官方 guest 执行入口运行测试资源 `media/sparse-preview.py`，参数是该目录的
-`short.mp4` 和 `four-gib.mp4`。脚本独占创建稀疏文件，实际媒体数据位于 3 GiB，不能从 Host 挂载运行中工作卷或覆盖原文件。
-成功后将目录名写入同 cache 的临时文件，再原子改名为 `remote-preview-sparse.done`；禁止预写回执。
-设备验证 4 GiB HEAD、跨 2 GiB 与末尾 Range 及真实解码，finally 删除本次目录与握手文件，将结果写入
-`remote-preview-live-evidence.json`。截图位于应用 external files。测试仍不代表完整 4 GiB 网络传输或高码率持续播放。

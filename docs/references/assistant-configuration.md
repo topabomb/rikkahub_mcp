@@ -74,11 +74,9 @@
 
 关闭记忆不会删除已有数据。`useGlobalMemory` 只改变读取和写入的命名空间。
 
-`memory_tool` 通过 `MemoryService` 与 `MemoryRepository` 修改当前 `MemoryAddress` 的运行记忆；
-`MemoryEntity` 保存完整 scope、assistantId 与内容，更新和删除必须核对 scope、owner 和行 ID。
-空间共享记忆仍按个人或完整企业主体隔离。企业下发 Seed 随配置 generation 切换，单独进入 Disclosure，
-不写入运行记忆表，不受 `enableMemory` 或运行记忆删除影响。Seed 更新保留用户已有运行记忆。
-企业 Starter 使用独立 picker；企业助手通过聊天的统一助手选择与当前空间设置进入。公开定义与 Seed 只读，运行记忆沿原选择授权编辑；定义中的模型是默认值，可由当前空间使用偏好覆盖而不改写定义。
+运行记忆按空间主体及助手/共享 namespace 保存，企业 Memory Seed 是独立只读配置，
+不写入运行记忆表，不受 `enableMemory` 或记忆删除影响。
+存储、地址授权和工具卡修改入口见 [运行记忆](data-persistence.md#运行记忆的存储与授权)。
 
 ### 工具与扩展
 
@@ -133,14 +131,8 @@ MCP 的可见 schema 由匹配 definition 的完整非空 LKG Catalog 与用户�
 | `isSubAssistantGloballyVisible` | `false` | 是否对所有启用 Assistant Tools 的 Caller 可见 |
 | `allowedSubAssistantIds` | 空集合 | Caller 显式允许访问的 Target ID |
 
-有效访问必须同时满足：
-
-```text
-target.allowAsSubAssistant
-&& target.id != caller.id
-&& (target.id in caller.allowedSubAssistantIds
-    || target.isSubAssistantGloballyVisible)
-```
+有效访问要求 Target 开放调用、自身不是 Caller，且属于 Caller 允许列表或全局可见。
+当前权限的解析、企业叠加规则与运行中撤权见 [子助手访问控制](sub-assistant-architecture.md#配置发现与访问控制)。
 
 `description` 在开启 `allowAsSubAssistant` 时必须非空。持久化归一化会折叠空白并按 Unicode
 code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersistence()` 只强制关闭全局可见；
@@ -151,20 +143,9 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 ### `LocalToolOption`
 
-| 选项 | 实际注册工具 |
-|------|--------------|
-| `TimeInfo` | `get_time_info` |
-| `Tts` | `text_to_speech` |
-| `AskUser` | `ask_user` |
-| `JavascriptEngine` | `eval_javascript` |
-| `Clipboard` | `clipboard_tool` |
-| `ScreenTime` | `get_screen_time` |
-| `Calendar` | `calendar_query`、`calendar_create` |
-| `AssistantManagement` | `assistant_manage`、`assistant_inspect` |
-| `AssistantDelegation` | `assistant_call` |
-| `TextToImage` | `generate_image`（默认图片模型有效时；Master 与 Target 均可） |
-
-工具是否需要审批由参数解析与纯校验后的 `Tool.interactionRequirement` 决定，而不是由枚举统一决定。`generate_image` 仅在 `set_as_background=true` 时审批。Target 非交互下该审批仍返回 `tool_not_permitted`。
+本地工具注册与语义见 [提示词与工具](prompts-and-tools.md#4-工具接口中的关键语义)，选项以 `LocalToolOption` 为准。
+默认工具集见下文；是否审批由参数解析、纯校验后的 `Tool.interactionRequirement` 决定，不由枚举统一决定。
+`generate_image` 仅在设置背景时审批，Target 非交互调用仍受子助手协议约束。
 
 ### `PromptInjection`
 
@@ -191,7 +172,7 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 用户配置沿 [Settings 提交协议](android-configuration-architecture.md)写入，持久化成功后才发布；跨助手权限清理、选择修正和删除 tombstone 必须在同一次配置提交完成。共享定义编辑器明确编辑用户定义，不将个人读取投影视作企业授权。
 
-`Settings.normalizeForPersistence()` 在每次写入前运行，只负责规范化
+`Settings.normalizeForPersistence()` 在写入前运行，其助手相关处理包括规范化
 `Assistant.description`、在未开启子助手类别时强制关闭全局可见、按 `assistantId` 去重
 `pendingAssistantDeletions`。失效的 MCP / 注入 / 快捷消息引用、重复 id、内置 Provider 补齐由
 `materializeForRead()` 负责，不在 `normalizeForPersistence` 里。
@@ -217,15 +198,6 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 `contextMessageLimit` 的输入草稿仅在完成编辑或失焦时提交，合法值为 `0` 或 `40..512`；关闭写 `0`，重新启用写默认值 `80`。外部更新不覆盖正在输入的草稿，重复完成事件不会重复提交。算法和请求窗口见 [请求上下文](request-context.md)。
 
-## 7. 实现与验证
-
-| 边界 | 文件 |
-| --- | --- |
-| Assistant 数据模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
-| 用户配置写入与域内解析 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt`、`data/configuration/ResolvedConfiguration.kt`（`ConfigurationResolver`） |
-| 读取物化、写规则与提交 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt`、`SettingsWriteRules.kt` |
-| 会话归属与生成装配 | `app/src/main/java/net/weero/measix/pilot/service/ConversationApplicationService.kt`、`ConversationTurnService.kt`、`service/turn/TurnRunner.kt`、`service/turn/StepRunner.kt`、`service/turn/ToolBatchRunner.kt`、`service/turn/TurnRunState.kt`、`data/ai/tools/TurnToolSetFactory.kt` |
-| 助手管理工具 | `app/src/main/java/net/weero/measix/pilot/service/AssistantManagementService.kt`、`data/ai/tools/AssistantToolFactory.kt` |
-| 子助手策略与执行 | `app/src/main/java/net/weero/measix/pilot/data/ai/subassistant/SubAssistantRunPolicy.kt`、`service/subassistant/SubAssistantRunCoordinator.kt` |
+## 7. 维护与验证
 
 维护配置时从持久化默认值、UI/工具创建入口、解析与归一化到请求消费核对同一语义。重点验证旧 JSON 缺失字段、模型三态、跨主体偏好隔离、并发差量写入和助手删除恢复；生成与子助手的验证边界见各自专题。

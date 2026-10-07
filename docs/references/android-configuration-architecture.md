@@ -186,7 +186,7 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 
 `EnterpriseIdentityDataDisposer` 按 principal 编排各 owner 清理。`EnterpriseDataResetService` 先持久保存“仅删除接入”或“接入和全部企业历史”的 reset intent，由应用 scope 的 worker 持有该操作；页面取消只取消等待，不取消已接纳的清理。重试复用尚在执行的原 intent，UI 区分 running、pending 与 failure。服务复用关闭屏障并在重启后继续；启动 resume 保持 `ApplicationRecoveryCoordinator` 门禁开放前的原恢复顺序，更强删除终态可扩大清理范围。任何分支都不删除个人数据，也不依赖 Core logout 成功；损坏 manifest 不能通过回读旧值假装重置成功。
 
-接入、格式与消费者义务的外部权威见 [Control Protocol](../../../measix/measix-architecture/docs/10-runtime-foundation/s0/measix-s0-control-protocol.md)。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
+接入与配置 wire 以固定的 Core 导出 [Client Control 合同](../../app/src/test/resources/contracts/platform/client-control.openapi.yaml)及其 [来源 manifest](../../app/src/test/resources/contracts/platform/manifest.json)核对。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
 
 ### 按主体解析与使用偏好
 
@@ -237,37 +237,10 @@ Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中�
 
 ### 4.2 Provider 与 Model
 
-Local `ProviderSetting` 是三种密封类型：
-
-| 类型 | 公共字段 | 类型特有字段 |
-|---|---|---|
-| `OpenAI` | `id/enabled/name/models/balanceOption` | `apiKey/baseUrl/chatCompletionsPath/useResponseApi/includeHistoryReasoning` |
-| `Google` | 同上 | `apiKey/baseUrl/vertexAI/useServiceAccount/privateKey/serviceAccountEmail/location/projectId` |
-| `Claude` | 同上 | `apiKey/baseUrl/promptCaching/promptCacheTtl` |
-
-`balanceOption` 为 `{enabled=false, apiPath="/credits", resultPath="data.total_usage"}`。`builtIn`、描述 Composable
-是读取时恢复的 transient 元数据，不属于持久 wire。
-
-每个 Local `Model` 的完整结构：
-
-```text
-Model
-  modelId: String                    # provider upstream selector
-  displayName: String
-  id: ConfigurationReference         # stable definition reference
-  type: CHAT | IMAGE | EMBEDDING
-  customHeaders: CustomHeader[]
-  customBodies: CustomBody[]
-  inputModalities: TEXT | IMAGE []
-  outputModalities: TEXT | IMAGE []
-  abilities: TOOL | REASONING []
-  tools: search | url_context | image_generation []
-  providerOverwrite: ProviderSetting?
-```
-
-`providerOverwrite`、custom headers/body、base URL 和 API key 都是 Local 高级覆盖；它们不能进入 Managed Model。
-`CustomHeader.value` 以及嵌套 `providerOverwrite` 也可能直接包含 secret，不能当成公开企业 definition。
-辅助结构为 `CustomHeader {name, value}`、`CustomBody {key, value: JsonElement}`。
+用户 `ProviderSetting` / `Model` 保存连接参数、模型能力和高级覆盖，字段以原类型声明为准。
+`providerOverwrite`、custom headers/body、URL 和 API key 只属于用户定义，可能含凭据；
+企业公开 Model 与私有 execution binding 独立，不以这些覆盖字段作为受管执行来源。
+有效模型选择由 Resolver 派生，执行 owner 复验原域准入；wire 差异见 [Provider 协议](protocol-reference.md)。
 
 ### 4.3 Assistant、Prompt、工具与引用
 
@@ -304,18 +277,9 @@ Opening 的 System 只在当前会话助手等于原助手时参与选择，优�
 
 ### 4.5 搜索配置
 
-```text
-SearchCommonOptions
-  resultSize = 10
-
-SearchServiceOptions
-  BingLocalOptions { id }
-  TavilyOptions   { id, apiKey, depth="advanced" }
-  SearXNGOptions  { id, url, engines, language, username, password }
-```
-
-Search 包含本地用户 API key/URL/账号，不作为 Model/MCP 路由或企业凭据载体。
-当前 `SearchServiceOptions.DEFAULT` 在类加载时由 `BingLocalOptions()` 产生随机 UUID，不具备跨安装/跨设备稳定性。
+`SearchServiceOptions` 保存用户搜索服务定义及凭据，不作为 Model/MCP 路由或企业凭据载体。
+默认 `BingLocalOptions()` 使用随机 UUID，不具备跨安装稳定性，不能作为企业资源引用。
+参数与默认值以声明为准；搜索装配与模型内建搜索的区别见 [助手配置](assistant-configuration.md)。
 
 ### 4.6 语音配置
 
@@ -343,16 +307,13 @@ CrashHandler 的独立 `crash_handler` SharedPreferences 保存 `crashed` 和截
 
 ### 5.2 Room 中的配置性事实
 
-- `WorkspaceEntity`：`id/name/root/shellStatus/toolApprovals/createdAt/updatedAt/lastAccessAt`；
-- `ConversationEntity`：以 `assistantId` 固定会话归属，并可保存 `customSystemPrompt`、`modeInjectionIds`、`workspaceCwd`；
-- `conversation_model_context`：类型化的模型上下文条目；请求贡献由 Assistant variant 拥有并保存因果定位，预置/摘要来源指向自身消息；不属于 Settings、UI 投影或独立导出域；
-- `FolderEntity`：`id/assistantId/name/sortIndex/createAt`，作为某个 Assistant 下的 Local 会话分组；
-- Workspace shell 状态和时间戳是生命周期状态，`toolApprovals` 是 Local 用户覆盖；
-- 会话覆盖只有在 Assistant 对应 allow 字段开启时才生效。
+Workspace 注册和审批、会话助手及合法覆盖、文件夹和模型上下文归各自数据 owner；
+它们不是远端 Settings，也不因配置引用而改变归属。会话覆盖须由对应 Assistant 的 allow 字段开放。
+企业会话与文件夹按完整主体隔离，本地 Workspace 是显式共享资源；
+`WorkspaceConfig` 的内置限额没有企业下发入口。
 
-`WorkspaceConfig` 的文件读写、列表与搜索上限是代码内置运行限制，不是持久化 Settings，也没有企业下发入口。具体执行边界由 [Workspace](workspace-architecture.md)维护。
-
-这些事实归原配置或用户数据 owner，企业域按完整主体保存会话与文件夹；Workspace 注册及目录为显式共享配置，不属于企业 Snapshot 或远端会话同步。
+结构、迁移及上下文事实见 [数据持久化](data-persistence.md)，Workspace 生命周期与操作见
+[Workspace](workspace-architecture.md)。
 
 ### 5.3 Skills 与文件资源
 
@@ -369,51 +330,16 @@ ZIP bundle 完整解析并拒绝重复 Skill name 后，复制整个 Skill root�
 
 SkillManager 的 `saveSkill`、`saveSkillFile`、`saveSkillFileBytesAtomically` 与 `deleteSkillFile` 使用单一 suspend 写入口，在 staging 校验完成、发布前检查取消。预期拒绝返回稳定结果码，非预期 IO 抛出原异常，补偿失败保留 suppressed；不再通过 nullable metadata、Boolean 或无 cause 的 IO_FAILURE 丢失原因。GitHub HTTP 429 或带明确限流信号的 403 归为 RATE_LIMITED，普通 403 保留 HTTP 拒绝；status、有限长度响应 detail 与网络 cause 进入同一可复制诊断。搜索只按 name/description 过滤当前 metadata 展示，不更改 enabledSkills 或文件身份。
 
-## 6. 用户配置引用图与运行依赖
+## 6. 稳定引用与读取物化
 
-```text
-Settings.providers[].id
-  └─ providers[].models[].id
-       ├─ Settings.{chat,fast,title,imageGeneration,suggestion,
-       │            attachmentInspection,compress}ModelId
-       └─ Assistant.chatModelId
+用户定义的 Provider、Model、Assistant、MCP 等保持原 ID；按域选择保存类型化引用。
+已创建会话的助手归属不随新会话选择改变，资源引用不赋予当前域访问资格，显式失效选择保留原因。
 
-Settings.assistants[].id
-  ├─ Settings.assistantId                    # 个人新会话选择
-  ├─ Conversation.assistantId                # 已有会话权威归属
-  ├─ Folder.assistantId                      # 同一 scope 内会话分组
-  └─ Assistant.allowedSubAssistantIds
+Auto Model sentinel、默认助手、System TTS、内置 Provider、Learning Mode 和预设主题的已发布 ID 参与兼容；
+重命名显示文本不能重新生成身份。读取物化补齐内置资源、按 ID 去重并处理部分失效引用，
+不把结果静默写回磁盘。跨记录删除、授权清理和默认选择修正仍由对应命令在同次 Settings 提交完成。
 
-Assistant
-  ├─ tags[]              → Settings.assistantTags[].id
-  ├─ mcpServers[]        → Settings.mcpServers[].id
-  ├─ modeInjectionIds[]  → Settings.modeInjections[].id
-  ├─ quickMessageIds[]   → Settings.quickMessages[].id
-  ├─ workspaceId         → Room WorkspaceEntity.id
-  └─ enabledSkills[]     → filesDir/skills/<name>
-
-Settings.selectedSearchServiceId → searchServices[].id
-Settings.selectedTTSProviderId   → ttsProviders[].id
-Settings.selectedASRProviderId   → asrProviders[].id
-Conversation.folderId            → Folder.id
-```
-
-Auto Model sentinel、默认助手、System TTS、内置 Provider、Learning Mode 和预设主题的已发布 ID 参与引用兼容，以各自默认常量为准；重命名显示文本不能重新生成身份。默认 Bing Search 当前使用随机 UUID，不是跨设备稳定资源，也不能作为企业引用。
-
-读取物化会补齐 Built-in Provider/Assistant/System TTS、按 ID 去重，并清理部分失效引用；它不会把清理结果静默写回磁盘。
-跨记录删除、授权清理和默认选择修正仍需由对应 application service 在同一次 `updateLocal` transform 中完成。
-
-## 7. 关键架构文件
-
-| 边界 | 文件 |
-| --- | --- |
-| 用户配置、偏好与提交发布 owner | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsStore.kt` |
-| 读取物化与持久化归一化 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsNormalization.kt` |
-| 个人持久化规范化与配置拒绝类型 | `app/src/main/java/net/weero/measix/pilot/data/datastore/SettingsWriteRules.kt` |
-| 按域有效读模型与纯解析器 | `app/src/main/java/net/weero/measix/pilot/data/configuration/ResolvedConfiguration.kt` |
-| Assistant 配置模型 | `app/src/main/java/net/weero/measix/pilot/data/model/Assistant.kt` |
-
-## 8. 维护与验证
+## 7. 维护与验证
 
 以下变化必须同步本文：Settings 字段与默认读取语义、Local/Managed owner、有效读模型、持久化与备份边界、稳定引用
 规则，以及已经实际接入 Android 的平台 typed definition。

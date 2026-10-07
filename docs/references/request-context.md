@@ -6,9 +6,8 @@ Turn/checkpoint 归 [`turn-step-execution.md`](turn-step-execution.md)，模型�
 
 Durable Conversation、Conversation Presentation 和 Model Request Plan 是三个概念。请求投影不能
 成为第二持久化事实源。应用输入的正文、来源、请求接纳与位置属于 Conversation aggregate。Presentation 只提供轻量摘要，
-详情通过授权 query 按需读取；正文不进入会话列表、FTS 或普通消息分享。变化短标签只定位首次接纳该通知的请求，
-详情仅展示该请求新增的 EXTERNAL 分区；沿用历史不新增标签或请求条目。该条通知的完整原文和来源在对应变化详情中折叠查看，
-不设消息“更多 → 上下文”入口。此展示筛选不改变接纳记录、请求投影或历史回放。
+详情通过授权 query 按需读取；正文不进入会话列表、FTS 或普通消息分享。
+通知标签和变化详情只筛选显示，不改变接纳记录或历史回放，见 [消息渲染](message-rendering-pipeline.md#2-应用上下文变化展示)。
 
 ## 上下文策略
 

@@ -22,14 +22,8 @@ Caller 调用 Target 后，当前 Tool Loop 会等待 Target 返回终态。Targ
 
 ### Assistant 配置
 
-与子助手有关的字段定义在 `Assistant`：
-
-| 字段 | 语义 |
-|------|------|
-| `description` | 用于路由和 Catalog 的能力描述，不是 System Prompt |
-| `allowAsSubAssistant` | 是否属于可调用的 Target 类别 |
-| `isSubAssistantGloballyVisible` | 是否对所有启用 Assistant 工具的 Caller 可见 |
-| `allowedSubAssistantIds` | Caller 显式允许访问的 Target ID 集合 |
+字段与默认值见 [助手配置](assistant-configuration.md#子助手访问字段)；
+`description` 是目录路由的能力描述，不等同于 System Prompt。
 
 有效访问公式为：
 
@@ -86,19 +80,13 @@ Child 的 `assistantId` 固定为 Target，`parentConversationId` 固定为 Mast
 
 每次调用的状态嵌入对应 `UIMessagePart.Tool.metadata["sub_assistant_call"]`。更新采用 merge，不替换整个 metadata，以保留 Provider 的 `functionCallId`、`thoughtSignature` 等不透明字段。
 
-关键字段包括：
+字段以 `SubAssistantCallMetadata` 为准；`run_id` 标识本次调用，下面只列易混淆的兼容与关联语义：
 
 | 字段 | 语义 |
 |------|------|
 | `schema_version` | 当前 metadata 版本为 2；等待交互使用本地调用身份 |
-| `run_id` | 当前调用 ID |
-| `previous_run_id` | 当前 Master 分支上同一 Target 的前序调用 |
-| `target_assistant_id` / `target_name_snapshot` | Target 身份与显示快照 |
-| `child_conversation_id` | 持久化 Child ID |
+| `run_id` / `previous_run_id` | 本次调用 / 当前 Master 分支上同一 Target 的前序调用 |
 | `child_task_node_id` | 本次 Child USER `UIMessage.id`；序列化字段名固定；值不是 `MessageNode.id` |
-| `state` / `phase` / `active_tool_name` | 状态机与当前阶段 |
-| `preview` | 主卡片的有界文本投影 |
-| `reason` | 失败、停止或不可用的稳定原因码 |
 | `has_non_text_output` | 本次 run 有用户可见非文本交付物（`generate_image` 成功图或最终 ASSISTANT 顶层媒体） |
 | `artifacts` / `artifact_omitted` | 轻量交付物引用（最多 4 条）与超出上限的省略数；只存引用，不存像素 |
 | `user_interaction` | 等待宿主回答的 `interaction_id`、Child `message_id`、`local_call_id`、工具名与入参；实际执行仍使用完整 `ToolCallLocator` |
@@ -154,7 +142,7 @@ finally 同样只以原 `childTurnId + runJob` 请求释放 active request 与 c
 
 ### 被委托助手生成
 
-Target 复用通用 `TurnRunner`，不是独立的简化模型循环。它应用 Target 的 System Prompt、记忆、输入/输出 Transformer、模式注入、上下文裁剪、Provider 协议和 checkpoint 机制。Child 不继承 Master 的会话级 System Prompt、模式选择、聊天历史或 Workspace 工作目录（`workspaceCwd`）；运行时使用 Child 自己的会话目录。
+Child 复用主会话的 Turn 与请求管线，使用独立 Target 配置和 Child 历史；不继承 Master 的会话覆盖、模式或 cwd。
 
 Coordinator 将 Child 的 `TurnRunInputs.onCheckpoint` 与 `onResult` 连接到同一个 `TurnCommitter`，流式与 phase 回调更新主卡片预览。完整 Tool locator、Step 边界和提交协议由 [turn-step-execution.md](turn-step-execution.md) 定义。
 
@@ -194,7 +182,7 @@ Target 当次模型不支持图片不构成入站失败。Child USER 与 Caller 
 
 `ConversationAttachmentPreviewProjector` 通过 `AttachmentReferenceLookup` 和已知附件工具顶层参数生成受授权的预览；UI 不扫描 metadata 或直连文件 Store。预览不是持久文件引用，也不授权后续工具读取。主卡片设背景属于 Master，Child 详情设背景属于 Target；文件失效时不伪造预览路径。
 
-Child 原文件与 Master 交付 metadata 的 `LocalArtifactRef` 均由现有引用计算器保护。Child 删除或裁剪不能删除仍被 Master 引用的交付物。Fork/clone 使用 `AttachmentCloner` 按 source-canonical 映射复制历史资源，重绑定 Image URL、artifact metadata 和模型清单；已知附件工具输入只重绑定本次已复制的路径，不额外复制，不改未知字段、正文或内部 UUID。clone 资源在 Child link 提交前由 Coordinator 持有，关联失败补偿，关联后失败保留已提交的 Child 与引用。
+Child 原文件与 Master 交付 metadata 的 `LocalArtifactRef` 均由现有引用计算器保护。Child 删除或裁剪不能删除仍被 Master 引用的交付物。Fork/clone 使用 `AttachmentCloner` 按 source-canonical 映射复制历史资源，重绑定 Image URL、artifact metadata 和模型清单；已知附件工具输入只重绑定本次已复制的路径，不额外复制，不改未知字段、正文或内部 UUID。
 
 读取与删除/GC、Child 提交和分支复制的竞态需以实际 ArtifactStore/Room 验证；JVM 投影测试不等于真实 Provider 图片输入验收。
 

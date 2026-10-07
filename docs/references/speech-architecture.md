@@ -15,9 +15,9 @@
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
-`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。没有自动合成重试或跳过队列项的旁路。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
+`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。合成失败保留诊断并继续后续队列项，不自动重试失败分片。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
 
-企业公开定义使用 `EnterpriseTtsResource`，共同字段为 `id/name/enabled/protocol`；云端协议携带 `modelId/voice` 等条件字段，System TTS 只携带 `speechRate/pitch`。云端 `voice` 必须按协议显式提供，不补 Android 默认音色。企业定义、用户 `TTSProviderSetting` 与平台执行描述 `EnterpriseExecution.Platform` 分开保存，短期凭据由 Session owner 提供。
+企业公开定义使用 `EnterpriseTtsResource`，按协议区分云端模型/音色与 System TTS 的 rate/pitch。启用的普通云端 TTS 显式提供 `voice`；MiMo voicedesign 显式提供非空 `voiceDesignPrompt` 并省略 `voice`，不补默认音色。企业定义、用户 `TTSProviderSetting` 与平台执行描述 `EnterpriseExecution.Platform` 分开保存，短期凭据由 Session owner 提供。
 
 `TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
 
@@ -33,7 +33,7 @@
 
 `RealtimeAsrController` 统一管理两种个人实时协议的连接、消息投影和停止流程，各自的 endpoint/session 编码仍取对应配置类型。`PcmAudioCapture` 独占一只麦克风及阻塞读循环。用户停止、服务端结束和关闭帧共用一次读循环等待与关闭握手；销毁等待所有已取消录音及原连接的 WebSocket 终态回调。`SpeechApplicationService` 保留原 Recognition、转写交付任务和第一次销毁回执；正常结束先完成最终交付，再等待 controller/录音/网络退出并释放 binding。取消或替换后，旧回调不得更新新输入或错误投影。`HttpAsrController` 使用同一 PcmAudioCapture 写入临时 WAV；停止后在写 WAV 头和上传前累计检查 PCM 的 RMS、峰值和非零样本数。无有效信号抛出 `NoSpeechDetectedException`，应用显示“未检测到语音，请重试。”且不会调用 transport；所有路径最终回收原文件，清理失败保留原文件与 owner 供重试。
 
-企业公开定义独立使用 `EnterpriseAsrResource`，共同字段为 `id/name/enabled/modelId/language/protocol`，其中 `language` 可省略，提供时必须非空。`EnterpriseSpeechDefinition.validate` 按协议校验条件字段：OpenAI/DashScope HTTP 禁止实时字段，OpenAI realtime 与 DashScope realtime 分别要求各自采样率、VAD 等参数，不跨协议补值。
+企业公开定义独立使用 `EnterpriseAsrResource`，`language` 可省略，提供时必须非空。`EnterpriseSpeechDefinition.validate` 按协议校验条件字段：OpenAI/DashScope HTTP 禁止实时字段，OpenAI realtime 与 DashScope realtime 分别要求各自采样率、VAD 等参数，不跨协议补值。
 
 ## 企业语音执行与授权
 
@@ -50,7 +50,6 @@
 
 ## 实现与验证
 
-实现从 `SpeechApplicationService`、`TtsController`、`SystemTtsSynthesisCoordinator`、`RealtimeAsrController`、
-`HttpAsrController`、`PcmAudioCapture` 和 `EnterpriseSpeechTransport` 进入。
+实现从 `SpeechApplicationService` 进入合成、实时与文件识别控制器；平台执行由 `EnterpriseSpeechTransport` 适配。
 验证必须区分控制器状态测试、Android 系统引擎/录音设备测试和真实服务调用；HTTP ASR 的有效音源前提见
 [测试策略](testing-strategy.md)。取消后的网络、麦克风和文件实际清理不能只用界面状态证明。

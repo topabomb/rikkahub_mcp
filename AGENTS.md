@@ -29,9 +29,10 @@
 每类持久化事实只有一个负责写入及生命周期管理的组件（owner）和一套写协议。跨领域操作通过已有类型化接口编排，
 不得旁路访问 DAO/Repository、使用服务定位器、从旧投影回写整个聚合，或建立第二份可编辑状态。
 
-UI/ViewModel 只提交 application 命令、消费 query/UiModel，不直连 DAO、Repository、Runtime Registry、
-Artifact/GeneratedMedia Store 或 payload 层。聊天使用 `ConversationPresentation`，不持有 Runtime Job，
-也不能从显示列表推导持久化写入。持久化流程使用 `ConversationAggregateSnapshot`，不消费显示快照。
+UI/ViewModel 通过 application 命令和授权 query/UiModel 访问业务，不直连 DAO、Repository、Runtime Registry、
+Artifact/GeneratedMedia Store 或 payload 层。单 owner 的配置和 Skill 编辑复用原 typed contract；跨 owner 操作由
+application service 编排，不增加无语义透传层。聊天只消费 `ConversationPresentation`，不持有 Runtime Job 或从
+显示列表推导写入；持久化流程使用 `ConversationAggregateSnapshot`。
 
 会话修改沿 `ConversationCommandCoordinator`、Runtime、Transition 与 `TurnCommitter` 的既有提交链执行。
 事务成功后才发布持久状态；流式投影可以提前显示，但不作为已提交事实。标题由 `ConversationTitleCoordinator`
@@ -43,7 +44,7 @@ Artifact/GeneratedMedia Store 或 payload 层。聊天使用 `ConversationPresen
   `START` 创建新一轮，`CONTINUE_USER_INTERACTION` 保留原 `TurnHandle`；继续审批或回答不能清树、补填附件或新建第二轮。
 - 工具装配、参数校验、交互、执行和终态使用明确的类型与阶段，并共享同一 Step 工具索引。
   `Tool.parseArguments` 和工具纯校验先于审批；资源、权限和远端业务校验由执行组件负责。
-  未执行的拒绝只提交消息结果，不创建执行记录；执行阶段只随已提交检查点推进，metadata 不另建平行状态机。
+  未执行的拒绝只提交消息结果，不创建执行记录；持久执行阶段只随已提交检查点推进，metadata 不另建平行状态机。
 - 工具的 output 或可回放结果只证明结果存在，不能代替活动阶段、当前权限或详情访问资格。
   子助手复用同一生成与终态协议，不另建简化执行链。
 - 取消必须向上传播，不能被 `runCatching` 或宽泛 catch 吞掉。`NonCancellable` 仅用于已经取得明确资源或事务
@@ -73,11 +74,9 @@ UI 只提交类型化字段命令，不从显示值反推持久化语义，也�
 Starter 是任务入口，Opening 是首次用户提交时与会话一起保存的开场副本。选择入口不自动发送；
 首发需复验完整定义与准入，已有会话不能因重新选择入口而改写开场。详细版本与分支规则见配置和请求上下文参考。
 
-自动历史工具输出处理只使用 rolling compaction：成功请求后、检查点前，由
-`ToolOutputCompactionPlanner.planAfterSuccessfulRequest` 计划，阈值统一来自 `ContextBudget`，
-由 `ToolOutputStore.stageCompaction` 写入。只处理本次成功请求确实可见且已消费的历史 inline result：
-`ARCHIVABLE_TEXT` 归档，`REGENERABLE_TEXT` 折叠，`PRESERVE` 保留；保护窗口内或净回收不足的批次不改写。
-上下文长度控制优先，其次保持 prompt cache 前缀稳定。手动会话摘要是独立显式操作，自动会话摘要尚未实现。
+自动历史工具输出只用 rolling compaction，处理本次成功请求可见且已消费的历史结果，并沿原 Turn 提交链发布。
+保留策略、保护窗口和净回收阈值由 [请求上下文](docs/references/request-context.md)维护，不增加第二压缩入口。
+上下文长度控制优先于 prompt cache 前缀稳定；手动会话摘要是独立显式操作，自动会话摘要尚未实现。
 
 ### 文件、数据与恢复
 
@@ -118,18 +117,13 @@ Windows PowerShell 使用 `.\gradlew.bat`，macOS/Linux 使用 `./gradlew`。
 | 架构、跨模块或数据契约 | 在定向验证后执行 `test assembleDebug lintDebug assembleRelease --no-parallel --max-workers=1` |
 | 数据库迁移、Compose instrumentation、依赖 Android 平台行为或真实系统集成 | 还必须运行 `connectedDebugAndroidTest --no-parallel --max-workers=1`，并验证受影响的设备场景 |
 
-例如，Windows 定向测试可执行：
+定向命令和显式场景见 [测试策略](docs/references/testing-strategy.md)。设备门禁使用专用设备并明确目标；
+安装/卸载可能清除 Debug 数据，不能直接用于用户或日常演示设备。需要已接入状态的 live 场景采用保留数据安装和
+直接 instrumentation。真实 Core/Provider、有效麦克风和 PRoot 镜像分别准备、记录，不能用替身或跳过证明真实集成。
+失败后的重跑通过不等于根因已修复。
 
-```powershell
-.\gradlew.bat :app:testDebugUnitTest --tests "<完整测试类名>" --no-parallel --max-workers=1
-```
-
-设备门禁使用专用测试设备并明确目标，安装/卸载可能清除 Debug 数据，不能直接用于保留用户或日常演示数据的设备。
-真实 Core/Provider、有效麦克风输入、PRoot 镜像等显式场景，按 [测试策略](docs/references/testing-strategy.md)
-准备环境并分别记录；JVM、构建、模拟器和真实服务的证据不能相互替代。失败后的重跑通过不等于根因已修复。
-
-交付前检查 `git diff --check`、最终 diff、报告、编码/换行和工作树。说明具体改变、验证结果、未验证边界，
-以及实际 commit/push 状态；不要顺带更新 `versionCode`、`versionName` 或 changelog，除非用户明确要求发布版本。
+交付前检查 `git diff --check`、最终 diff、报告、编码/换行和工作树，说明改变、验证、未验证边界及实际 commit/push 状态。
+版本号仅在用户要求发布时更新；changelog 在用户要求版本说明或变更整理时更新，不作为日常实现记录。
 
 ## 审查重点
 
@@ -156,8 +150,10 @@ Windows PowerShell 使用 `.\gradlew.bat`，macOS/Linux 使用 `./gradlew`。
   按稳定领域组织参考文档；相关子主题优先并入现有文档，只有具备独立职责和阅读场景时才新增专题。
   同一规则只在所属专题完整维护，其他文档保留理解边界所需的摘要；删除重复字段、过程记录和可直接从代码获取的低价值清单。
   本文件只保留跨任务约定和高风险边界，不累积事故记录或重复专题说明。
-- `docs/dev/original-architecture.md`、`docs/dev/fork-simplification-plan.md` 是历史归档；上游同步每批先 fetch，
-  再续写 `docs/dev/upstream-sync.md` 及对应记录。历史与未实施方案不能充当当前实现依据。
+- 版本说明先固定上版 tag 与本次代码终点，核对区间 diff 和最终实现；既有能力、过渡实现及未执行验证不能写成新增或通过。
+- 已完成的一次性计划与旧架构保留在 Git 历史；未实施设计只维护仍待决定的范围，完成后归入所属参考文档。
+  上游同步每批先 fetch，再续写 `docs/dev/upstream-sync.md` 及对应记录；冻结批次保留追溯证据，
+  历史与未实施方案不能充当当前实现依据。
 - 遵循 `.editorconfig`：Kotlin/Gradle 4 空格，XML/JSON/Markdown/YAML 2 空格，UTF-8 无 BOM。
   常规源码和文档沿用 CRLF；明确要求 LF 的脚本、补丁及生成文件按各自格式保留，不做无关换行转换。
   注释解释长期语义、资源责任和非显然原因，不保留临时实施计划。

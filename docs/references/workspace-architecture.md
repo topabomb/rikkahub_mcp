@@ -35,7 +35,7 @@ Assistant.workspaceId 有效
 | `WorkspaceQueryService` | 把 Workspace 列表/详情投影为 `WorkspaceUiModel`，并提供文件列表、文本预览和 `observeTerminal` 读口；UI 不直接访问 Repository 或 Manager |
 | `WorkspaceTerminalRuntime` | application-scoped PTY、创建 Job、Tab/选中项和 shell-exit 生命周期唯一 owner |
 | `WorkspaceTools` | 注册 `workspace_*` schema、审批与结果形状；执行只使用受限 `WorkspaceToolSession` capability |
-| `WorkspaceTerminalSession` | 通过 Termux PTY 提供用户交互终端 |
+| `WorkspacePtySession` | 通过 Termux PTY 提供用户交互终端 |
 
 `workspace` Gradle 模块不依赖应用 UI；`app` 模块负责 Room、Compose、文件上传、工具注册和 DI。
 Workspace 工具由 `TurnToolSetFactory` 在 Master/Target 共用的 `TurnCommitter` 管道中装配；工具执行事实经 `TurnCheckpoint` / `FinalizeTurn` 写入，不另开落库路径。
@@ -82,6 +82,10 @@ Rootfs 内的主要映射：
 
 批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
 
+本地工作区与聊天文件分享共用 `WorkspaceApplicationService.shareFile`，系统交付前副本归本次调用；
+交接失败或取消清理未交付副本。成功交付后保留至少 24 小时，在后续分享入口回收过期文件，
+不沿用远程分享的启动清理协议。
+
 `WorkspaceDetailVM` 在恢复前台时刷新当前目录，避免外部修改后沿用旧大小和修改时间。文件图片通过 `WorkspaceApplicationService.imageSource` 绑定 workspace/area/entry，直接 stat 复验修订和实际字节上限，不依赖有数量上限的目录列表，不另建预览副本或缓存 owner。
 
 本地 `WorkspaceFileSystem.readText` 和 Linux 区预览通过 `decodeWorkspaceText` 严格解码，拒绝非法编码和 NUL，
@@ -100,17 +104,7 @@ Android Process 的终止请求由 PRoot 自身处理：启动前阻塞 TERM/QUI
 安装 handler 后才解除阻塞。两个信号共用既有 tracee registry 和 event loop，持续终止并回收包括晚到 fork/clone 事件中的子进程。
 Shell 保持 ProcessBuilder 和分离管道；WorkspacePtySession 使用现有 PID 发 TERM，不新增 wrapper 或进程监督 owner。
 
-`ProotLaunchSpec` 的关键参数：
-
-```text
---root-id --link2symlink --kill-on-exit
--k 4.14.0
--r <linuxDir>
--w /workspace/<relative-cwd>
--b <filesDir>:/workspace
-...configured bind mounts...
-/usr/bin/env -i <explicit environment> /bin/bash -c 'eval "$1"' MeasixPilot <command>
-```
+`ProotLaunchSpec` 统一构造 executable、Rootfs、bind、cwd、环境与命令参数；具体 argv 以类型实现为准。
 
 - `--root-id` 只伪装 guest UID/GID，不赋予 Android root 权限。
 - `--kill-on-exit` 在初始 guest 退出时终止其余 tracees；主动关闭必须通过 TERM/QUIT 让 PRoot 回收，不能 SIGKILL tracer。
@@ -179,17 +173,8 @@ Workspace 或工具权限后，当前 Turn 的 Provider schema 仍使用 START �
 
 ## 6. 进程、超时与取消
 
-```text
-WorkspaceApplicationService.executeTool()
-  -> WorkspaceToolSession.executeCommand()
-  -> WorkspaceRepository.executeCommand()
-  -> runInterruptible(Dispatchers.IO)
-  -> WorkspaceManager.executeCommand()
-  -> ProotShellRunner.execute()
-  -> ProotLaunchSpec.from(...)
-  -> ProcessBuilder.start()
-  -> readResult(timeout, stdin)
-```
+`WorkspaceApplicationService.executeTool` 经原 Workspace command gate 取得执行能力；
+Repository 用 `runInterruptible` 调度 `ProotShellRunner`，进程和流归本次命令。
 
 stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 `readResult` 在 `stdin == null` 时立即关闭管道，向子进程声明没有输入；等待 EOF 的 CLI（`cat`、`read`、
@@ -197,7 +182,7 @@ stdout、stderr 和可选 stdin 使用独立 daemon 线程。
 
 ## 7. 交互终端
 
-`WorkspaceTerminalContent` 消费 Scaffold padding 后使用 `WindowInsets.imeAnimationTarget`，避免 IME 动画中反复改变 PTY 高度。单击聚焦和键盘交给 Termux ViewClient，页面不以通用 ACTION_UP 强制显示键盘。终端深色 CompositionLocal 不写 Window，系统栏由 Activity 根据当前可见路由设置。
+终端视口、IME 与系统栏由 [UI 架构](ui-architecture.md)维护，PTY 生命周期不随页面布局变化。
 
 `WorkspaceTerminalRuntime` 是所有交互终端的 application-scoped owner。它通过 service 层的 `WorkspacePtySession` 创建 Termux PTY，并独占原 RealmAccess、session、创建 Job、字节 writer、tab 顺序、选中项和 shell-exit 清理。UI/VM 只持有 `WorkspaceTerminalTabUiModel`；UI 自己拥有的 `TerminalView` 以 `WorkspaceTerminalViewport` capability 按 tab id bind/unbind，不能取得 runtime-owned `TerminalSession`。页面离开或应用进入后台不关闭 PTY，进程死亡后也不持久化虚假的运行态。
 关闭终端 Tab 前需要二次确认：确认态是 `WorkspaceTerminalPage` 的 UI 临时状态，确认后仍经
@@ -314,7 +299,7 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 
 ### 文件管理与预览
 
-列表复用 `FileRow`，窄屏与大字体保留必要元信息，宽屏按列对齐；筛选只作用于当前目录，切目录时清除。长按进入多选，返回先退出选择。批次进度由实际循环的 `activeIndex/batchSize` 和当前目标发布，只在已知长度时显示传输比例，字节传完仍等待远端结果。完成后提供汇总及逐项诊断，UNKNOWN 保留读取核验入口；新批次或清除已知结果不能删除未核实路径。
+列表筛选和选择由页面管理；批次进度由实际循环的 `activeIndex/batchSize` 和当前目标发布，只在已知长度时显示传输比例，字节传完仍等待远端结果。完成后提供汇总及逐项诊断，UNKNOWN 保留读取核验入口；新批次或清除已知结果不能删除未核实路径。
 
 `WorkspaceFileRules.child` 在提交前校验名称。非法名称和另存同源的预期拒绝保留原对话框、输入和可展开诊断，不发远程写入；其他异常保留完整诊断。目录目标不能是源位置、源目录自身或其内部。批次结束或取消先清空旧目录再开放动作，同时保留结果、待核实记录和编辑草稿；仅未取消且原句柄仍有效时刷新。新目录发布后只保留仍存在的选择，空选择不执行批量操作。
 
@@ -322,7 +307,9 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 
 预览与编辑使用共享文件正文组件和文本类型识别，布局、代码高亮与动作可达性见 [UI 架构](ui-architecture.md)。
 远程仍沿 `WorkspaceText` 的 BOM/换行与 ETag 协议。
-不支持格式时显示元信息、下载和外部打开；读取失败显示原诊断与刷新，不能冒充格式不支持。图片信息沿原 `ImageSource` 授权，失败可重试；PDF 逐页缩放/平移，翻页释放旧 bitmap 并重建缩放状态，首尾禁用对应动作。加载失败回收本次副本，刷新复验原状态与句柄；缩放不提高渲染分辨率或资源上限。
+读取失败保留原诊断，不能冒充格式不支持；刷新复验原状态与句柄。PDF 逐页渲染并释放旧 bitmap，失败回收本次副本，缩放不提高渲染分辨率或资源上限。展示与动作见 [文件页面](ui-architecture.md#6-文件页面与编辑)。
+
+远程客户端当前只管理文件；没有远程终端、离线镜像、持久后台传输或直接把远程文件加入聊天附件的接口。
 
 ### 大文件音视频
 

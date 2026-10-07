@@ -39,7 +39,9 @@
 | `assistant_call` 注入 Child | 为新 Image part 写入附件元数据；原文件身份不变，不复制 payload |
 | 历史消息补章 | 仅在 `ConversationTurnService` 的 START structural preflight 由 `planDurableAttachmentRefBackfills` / `BackfillAttachmentRefs` 执行；会话加载与恢复只做校验，不由 UI/query 旁路补章 |
 
-所有字节型图片入口都在创建 durable artifact 前限制输入规模并校验实际内容：
+MCP 图片、生成结果、配置图片及生成预览在各专用入口执行有界内容校验；
+普通附件导入保存来源 metadata，不承诺已验证图片结构；图片内容是否可用由具体预览、识别或编码入口验证。
+请求媒体投影依据本次授权读视图与协议能力选择输入形态，不承诺读取或验证所有图片字节。各入口的处理包括：
 
 - MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；容器头存在不等于图片完整。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。

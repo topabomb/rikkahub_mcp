@@ -145,10 +145,8 @@ HTML/SVG 不获得 Portal Bridge，也不注入业务 JavaScript 接口。
 不在桥接线程直接解码或写相册。未提供图片解析器的独立使用场景采用 `externalImageSource`，不能据此读取本地文件。
 组件销毁取消导出协程；导出失败通过提示反馈，不具备通用预览错误卡的完整诊断展示。
 
-## 6. 验证入口
+## 6. 验证边界
 
-`ChatMessageCotTest` 覆盖 Step 分组、折叠交互、图片与失败占位；上下文投影/查询测试核对保存来源、variant 与迟到结果。
-Android 场景分别验证两种 Markdown 路径、代码完整性、正文选择、图片解码/相册以及文档替换和销毁。
-`RenderedContentReadAndroidTest` 检查来源读取状态和重试，`RichTextHostAndroidTest` 检查选择器回交、预览恢复及离屏树清理，
-`MermaidExportAndroidTest` 检查原文档、主题/来源替换与显式请求归属。
-系统文件交付、撤权和补偿还需对应文件服务及设备测试；分层与证据限制见 [测试策略](testing-strategy.md)。
+分组与上下文投影验证 Step、来源、variant 和迟到结果；Android 场景验证 Markdown 路径、代码完整性、
+选择与相册、文档替换和销毁、预览重试、离屏树清理及 Mermaid 导出请求归属。
+系统交付、撤权与补偿由对应文件服务和设备场景证明，入口与证据限制见 [测试策略](testing-strategy.md)。

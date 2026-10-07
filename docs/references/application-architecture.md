@@ -12,25 +12,10 @@ Pilot 是 Android 本地 Agent 工作台。一个 Conversation 保存用户可�
 
 ## 术语与阅读约定
 
-| 术语 | 本仓库含义 |
-| --- | --- |
-| Owner（责任组件） | 某类事实或资源的唯一写入/生命周期管理者；协作组件通过其协议提交动作 |
-| Durable state（持久状态） | 事务成功后可恢复的事实；与流式内存投影、页面状态分开 |
-| Command / Query | 命令改变事实；查询在授权边界内生成只读投影，UI 不从投影反推写入语义 |
-| Snapshot（快照） | 某一明确边界捕获的值；必须说明捕获时机、范围和适用版本，不暗示跨 owner 原子性 |
-| Projection（投影） | 从事实派生的请求或显示表示；不形成第二个可编辑事实源 |
-| Turn / Step | 一轮生成执行 / 一次逻辑模型请求及其工具批次；START 创建新轮，CONTINUE 继续原轮 |
-| Checkpoint（检查点） | 执行中经事务提交的进度与结果；提交成功后才推进 durable phase 或发布资源 |
-| Admission（准入/接纳） | 执行准入检查当前权限；请求上下文接纳保存定稿输入及来源，二者不是同一操作 |
-| Lease（资源租约） | 明确持有者及释放责任的使用权；不是永久权限，也不能只凭 ID 重建 |
-| Realm / Scope（空间/数据范围） | Realm 表达个人或企业使用上下文；Scope 标识持久数据归属，Session 另表达当前授权 |
-| LKG（Last Known Good） | 最近一次完整校验并持久化的目录；不是当前连接可调用性的证明 |
-| Disclosure（状态披露） | 应用向模型提供的结构化状态；区分初始、外部变化与窗口恢复，不等同用户新指令 |
-| Memory Seed / Starter / Opening | 企业只读背景 / 任务入口定义 / 首发时持久化的会话开场副本 |
-| Master / Caller、Target / Child | 发起委托的主助手、被委托助手及其独立子会话；共用生成引擎，各自持有执行与数据归属 |
-
-文中的英文类名、状态和字段用于定位代码；解释使用上述领域含义。协议字段的拼写不能用近义词改写。
-详细实现和测试入口在对应领域维护，历史验收记录不作为当前实现或当前环境可用性的证明。
+Owner 指事实或资源的唯一写入与生命周期责任组件；query/projection 不成为第二份可编辑状态。
+Scope 表达持久主体，Session 表达当前授权，两者不能互相替代。Snapshot 必须说明捕获时机；
+请求上下文的“接纳”表示输入已提交，执行“准入”表示当前获准操作，二者都不证明 Provider 已收到请求。
+其余状态、字段和协议术语在所属专题解释；历史验收记录不作为当前环境可用性的证明。
 
 ## 模块与依赖
 
@@ -98,7 +83,7 @@ application command
 ```
 
 - Runtime 明确区分 Loading、Draft、Ready、Missing、Failed。空 Draft 不落库、不进入会话列表；首条 AppendUserMessage 同事务建库并原位晋升 Ready。
-- 持久化失败不发布 next snapshot。Streaming 是唯一允许先发布且不落库的会话状态，只携带 owning Assistant，旧 Turn/epoch 的迟到输出被拒绝。
+- Draft 修改只发布内存状态；Ready 的持久修改提交成功后发布，失败不发布 next snapshot。流式增量仅更新 owning Assistant 的未提交显示投影，旧 Turn/epoch 的迟到输出被拒绝。
 - Durable 流程只读 ConversationAggregateSnapshot；UI 只读 ConversationPresentationSnapshot。显示列表不能反向作为写入事实。Non-resident command 使用同一 command gate，不能退回 Repository 旁路。
 - START 同事务建立 Assistant variant、首个 Step 与 turn fact；用户交互继续原 owner。工具参数纯校验先于审批，副作用前才创建 STARTED execution，最后结果与下一 Step 的创建原子提交。
 - Tool Call、Interaction、Execution 与 Result 各有 typed 事实。resultStatus 决定可回放结果是否存在；output 空与否不决定执行状态，live phase 也不能反向充当 durable truth。
@@ -130,7 +115,7 @@ Settings 与文件删除跨 owner 时，使用可恢复暂存和同一 Settings 
 pending backup restore
   → Settings/userSettings（用户文档初始化成功）
   → Artifact reconcile → GeneratedMedia reconcile
-  → pending enterprise data reset → 企业配置恢复
+  → pending enterprise data reset → 企业身份/配置恢复 → Portal 临时媒体恢复
   → reference projection → FTS projection
   → Child run recovery → Master turn recovery
   → pending assistant deletion
@@ -144,7 +129,7 @@ Settings 步骤直接等待 `SettingsStore.initializeForRecovery()`，包括首�
 
 领域 owner 无法处理的恢复异常进入 Failed，记录原堆栈，失败页提供可选择复制的类型、message 与 cause；全局 durable write 门禁保持关闭，retry 重跑同一幂等顺序。企业配置校验失败由 EnterpriseSessionController 发布，个人数据恢复继续；取消向上传播并保持门禁关闭，不发布为用户故障，原 recovery job 释放后可重试。文件 command/query 同样等待门禁，不能在删除状态和孤儿 payload 尚未完成恢复处理时访问托管文件。TurnRecovery 只查询非终态执行事实；缺 owning message 或损坏 payload 是完整性错误，不以空树、默认对象或 best-effort 写入伪装 Ready。
 
-恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。EnterpriseExitService 只完成已验证的 CLOSING token，核验 Runtime 与数据库没有原域未完成运行，且不等待尚由恢复任务持有的 ready gate；企业 manifest 本身不可验证时保持企业 Failed，不重复读取它阻断个人启动。恢复链在可注入的 IO dispatcher 执行；助手清理服务使用同一 DI singleton 的 Lazy 引用，在原清理步骤首次解析，避免进程主线程为启动门禁提前构造完整生成依赖链。失败与重试仍经过同一 gate。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
+恢复顺序归应用 coordinator，各领域恢复算法仍归原 owner。EnterpriseExitService 只完成已验证的 CLOSING token，核验 Runtime 与数据库没有原域未完成运行，且不等待尚由恢复任务持有的 ready gate；企业 manifest 本身不可验证时保持企业 Failed，不重复读取它阻断个人启动。失败与重试仍经过同一 gate。TurnFinalizer 不接管启动恢复，SubAssistantLifecycle 不另建生成或 Turn 终态写链。
 
 ## 持久化与演进
 

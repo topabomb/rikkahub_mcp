@@ -216,16 +216,13 @@ session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；
 
 ## 4. 发现与目录提交
 
-`McpCatalogDiscovery.fetchCandidate()` 从空 cursor 开始执行 `tools/list` 并遍历全部 `nextCursor`：
+`McpCatalogDiscovery.fetchCandidate()` 从空 cursor 完整遍历 `tools/list`。服务器须声明 tools capability，
+最多 64 页、4096 个工具；名称非空且唯一，cursor 不重复。原始 Tool JSON（含 Schema 与扩展字段）完整保留，
+全部页面成功后才形成 candidate。
 
-1. server 必须声明 tools capability；
-2. 最多 64 页、4096 个工具；
-3. 工具名必须非空且 server 内唯一，cursor 不得重复；
-4. 保留原始完整 Tool `JsonObject`，从中投影 Schema，保留 `$schema`、`$defs`、`$ref` 与扩展字段；
-5. 全部页面成功后才形成 candidate；
-6. `McpCatalogStore.commitCandidate()` 在单一 commit mutex 下计算 digest、revision 并原子落盘；
-7. 完整成功的受管 Direct MCP 空目录正常提交并替换旧工具；个人空目录仍拒绝并保留 LKG，Gateway 仍须完整工具对；相同 digest 是 no-op；
-8. definition 已变化时旧目录不再匹配，不能借 LKG 伪装新 server 已发现。
+`McpCatalogStore.commitCandidate()` 在唯一提交锁内计算 digest/revision 并原子落盘，相同 digest 为 no-op。
+受管 Direct MCP 的合法空目录替换旧目录；个人空目录拒绝并保留 LKG，Gateway 仍须完整工具对。
+definition 变化后旧目录不再匹配，不能借 LKG 伪装新连接已发现。
 
 Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进进程内 head token；低 generation 拒绝不推进 token，不能夺取较新提交的补偿权。若 Server Runtime 在持久化后发现 connection lease 已过期，只允许在 snapshot identity 与 head token 仍匹配时精确回滚；旧 operation 不能覆盖更新的目录事实。
 
@@ -237,7 +234,7 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 
 | 触发 | 行为 | 是否改变 Agent schema |
 | --- | --- | --- |
-| 首次无 LKG 的新对话 | 连接并完整发现，最多等待 20 秒 | 成功非空提交后加入当前 run；失败则本 run unavailable |
+| 首次无 LKG 的新对话 | 连接并完整发现，最多等待 20 秒 | 成功提交合法目录后供本轮捕获；个人空目录拒绝，受管 Direct 空目录不装配工具 |
 | 工具栏刷新或列表下拉 | 全部 enabled 用户 slot 执行同一真实 operation receipt；补建退化的通知订阅 | 成功提交后影响后续 run |
 | 用户点击单 server 重试 | 强制重建该 slot 并等待真实 operation receipt | 成功提交后影响后续 run |
 | `notifications/tools/list_changed` | 350ms 去抖，同 slot single-flight，运行中通知合并为一次 follow-up | 成功提交后影响后续 run |
@@ -315,15 +312,8 @@ ALLOWLIST 的完整契约须匹配原捕获与当前发布的 hash，ALL 不做 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
 调用结束的企业额度刷新按原调用的 `McpConnectionDefinition.ManagedPlatform` 判断；企业空间中的 `User` 连接不发送该信号。
 失败使用 `ToolExecutionFailure` 向 TurnRunner 返回稳定的 Agent 可见结果，并把 durable tool terminal 记录为 FAILED。
-Agent 看到[工具错误返回协议](prompts-and-tools.md#5-工具错误返回协议)的 `status + reason`，必要时有 `detail`：
-
-- `unavailable/tool_unavailable`：本地 definition、policy 或工具已经明确撤销；
-- `unavailable/server_unavailable`：当前没有可调用 session、正处于连接恢复，或当前 session 尚未完成 capability 握手；内部恢复已经触发；
-- `unavailable/authorization_required`：调用前需要用户授权；
-- `failed/protocol_incompatible`：已完成握手的 server 明确未声明 tools capability，或完整结果无法按 MCP 内容契约投影；
-- `failed/remote_error`：保留 `CallToolResult.isError` 的文本 content 与 `structured_content`，非文本内容用省略标记表示；明确 MCP error message 经裁剪后保留；
-- `failed/result_processing_failed`：完整结果已收到，但本地投影或保存失败；远端副作用可能已经发生；
-- `unknown/outcome_unknown`：承诺后未取得可确认结果；提示先核实远端状态。
+模型可见的 status/reason/detail 统一见 [MCP 阶段分类](prompts-and-tools.md#mcp-阶段分类)，不在此复制错误码表。
+承诺后未取得可确认结果须提示先核实远端状态；已收到结果但本地处理失败同样不能盲目重放。
 
 server/tool 身份、generation、transport 阶段、`retryable`、`request_sent` 和恢复动作只属于内部诊断，
 不进入模型上下文；本地异常的脱敏类型、消息和 cause 可进入有界 `detail`。
@@ -333,40 +323,30 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 
 ## 8. UI 投影
 
-`McpQueryService` 是唯一 UI read port。UI 的工具计数来自有效 Catalog 与本地 policy，不从连接 status 猜测：
+`McpQueryService` 是唯一 UI read port，目录、当前调用能力、目录刷新与通知健康分别表达。
+`McpRuntimeCapability` 原子发布 catalog 与 `sessionCallable`；后者由当前 client、transport、握手及准入决定，
+聊天“就绪”还要求至少一个本地启用工具。离线 LKG 可展示，不计入就绪数量；通知退化或刷新失败不单独证明调用不可用。
 
-`McpRuntimeCapability` 同时原子发布 `catalog` 与由当前 client、transport、握手和调用准入阶段计算的
-`sessionCallable`。前者只表示已确认的工具目录，后者表示当前会话能否进入工具调用；聊天页“就绪”还要求
-至少一个本地启用的目录工具。断连后的 LKG 继续显示，但不计入就绪数量；设置页和选择器仍用目录存在性
-决定是否显示工具与 loading。目录刷新与通知异常独立呈现，调用能力以 `sessionCallable` 为准。
+首次无目录的连接/发现/授权才显示 loading，后台恢复显示状态与下次重试。
+个人空目录是拒绝；受管 Direct MCP 的成功空目录表示当前无工具。
+服务器与助手范围、确认规则和有效计数由同一投影给出；工具缺失或契约变化保留原因，
+契约变化提示管理员重新发布，不与“调用前确认”混用。详情与原诊断按需展开。
 
-- 有 LKG 时，无论 Ready、Reconnecting、WaitingNetwork、RetryScheduled、NeedsAuthorization 或 Error，都显示真实工具数；
-- 只有首次无目录的 Connecting/Discovering/Authorizing 使用 spinner；maintenance recovery 使用静态状态和下次重试信息；
-- 个人空目录显示 rejected；受管 Direct MCP 成功空目录显示服务器当前未提供工具，不计入可用工具数；
-- 服务范围、助手范围、确认规则和有效计数只读显示；批准但未发现或契约已变化的工具保留可行动原因，详情渐进展开；
-- MCP 选择卡以名称、连接或准入状态和原开关为主，范围与固定绑定合并为次要说明；Ready 仅在 `sessionCallable` 为真时称工具可用，部分工具缺失或变更按数量汇总，不取目录的首项错误代表整个服务器。首次尚未发现目录使用中性提示，成功空目录与后台重连仍保持可区分；
-- 工具卡的“调用前确认”仅说明可执行工具的显式确认规则；契约变化提示管理员重新发布，两者不混用。只有实际存在描述或参数时提供展开动作；共享用户定义继续使用原启用与确认开关；
-- 企业服务器的目录展开按钮显示紧凑数字，首次未发现目录显示发布项数量，已确认目录显示启用/总量；读屏保留完整的本地化数量说明；
-- 工具栏刷新图标与个人、企业列表下拉共用同一命令，刷新中禁用重复触发；图标的无障碍说明为“刷新我的 MCP”，列表不另占一行放按钮。spinner 只绑定本次用户 command 的 20 秒 receipt，不绑定全局后台恢复。企业目录在首次执行时发现，页面只读展示已确认目录，不为浏览或下拉建立 interaction；
-- 用户服务卡片的名称使用紧凑标题；传输类型和正常状态合成摘要，工具数量不重复堆叠为彩色标签。异常时保留目录计数，将状态说明和诊断入口放在同一行；来源标签只在跨域管理时显示；
-- 未激活显示“使用时连接”；恢复缓存显示已保存工具数量，不用失败文案。notification stream 单独退化时保留 command transport 与目录，说明自动更新中断；刷新失败说明保留已确认目录，完整诊断可展开；
-- 来源、当前域准入、强制启用、Gateway policy 与工具目录由同一 presentation 提供，Compose 不直连 Manager/Store。
+`userServers` 管理共享用户定义，保留 OAuth、工具策略与原编辑器，并说明跨空间影响。
+工具栏和下拉刷新共用用户刷新命令，spinner 只观察本次 20 秒 receipt；超时后的后台恢复不继续显示刷新动画。
+企业定义只读，浏览或下拉不创建 interaction 或执行连接，不提供编辑、删除、OAuth 或单工具策略入口。
 
-`userServers` 明确用于共享用户定义管理，保留原 OAuth、工具策略和编辑入口，并说明跨空间影响。
-按域目录通过 `ConfigurationQueryService` 读取原配置，复用 Coordinator 的 `readCatalogCapabilities` 验证完整主体、generation、surface 和当前 binding 摘要。
-目录行携带原 `RealmAccess`，聊天按原 Session 匹配；企业定义没有可编辑的 `McpServerConfig`，也不暴露 endpoint/header/credential。
-读取失败发布 `McpCatalogReadState.Unavailable`，之后的 owner 变化可以恢复观察；私有 Applied revision 单独唤醒读取。
-选中目录在选择变化时先清空，停止订阅后不保留旧企业 replay，重开先重新授权。
-`McpCatalogCapability` 保留同一资源、原 Session 和定义摘要匹配的全部连接，个人维护连接不借给企业投影。
-`McpQueryService` 只读汇总：没有连接显示使用时连接；存在可调用连接时显示就绪，只有部分可调用时显示部分连接就绪。
-全部不可调用时优先保留授权或失败提示，其次显示正在连接、重试和等待网络；多个重试显示最近的一次。
-错误详情合并连接、刷新及通知的原诊断，已确认工具目录独立显示。该汇总不写回 Runtime，也不代替任何 interaction 的调用准入。
-个人与企业选择器使用相同状态图标：未连接使用断开的链条，就绪使用 MCP 图标，后台连接或重试使用时钟，失败或待授权使用警示图标。
+按域查询携带原 RealmAccess，验证主体、generation、surface 与 binding 摘要；读取失败发布
+`McpCatalogReadState.Unavailable`，外层空间观察仍可恢复。切换选择先清空目录，重开重新授权，
+个人维护连接不能借给企业投影。
 
-企业 MCP 卡片没有编辑、删除、关闭、OAuth 或单工具策略入口；用户定义始终可管理，企业准入被禁止时显示原因。
-Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携带渲染时的 `RealmSelection` 并复验原选择版本，等待提交时禁用重复操作。
-`com.measix/resolvedTool` 的安全元数据随原工具 checkpoint 持久化；默认工具卡用其业务 name，详情仅展示 gatewayToolId/name/status/requestId。
-显示不解析下游输出猜测身份、不再次请求 Gateway，输出归档不删除这份业务身份。
+`McpCatalogCapability` 汇总匹配原资源、Session 和定义的连接：无连接表示使用时连接，
+全部或部分可调用分别表示就绪或部分就绪；都不可调用时优先显示授权/失败，再显示连接、重试或等待网络。
+错误详情合并连接、刷新和通知诊断，目录独立保留；汇总不写回 Runtime，也不替代 interaction 准入。
+
+Gateway 启停仍受发布 policy 约束，REQUIRED 只读，写入复验渲染时的 RealmSelection。
+`com.measix/resolvedTool` 的安全业务身份随原 checkpoint 持久化，不从下游正文推测身份，
+不再次请求 Gateway，归档 output 不删除该身份。Core 当前提供范围见本篇企业平台连接。
 
 ## 9. 企业调用与只读检查
 

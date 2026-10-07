@@ -20,8 +20,8 @@
 
 相关文档及职责：
 
-- [original-architecture.md](../original-architecture.md)：Fork 前架构历史基线，冻结不改。
-- [fork-simplification-plan.md](../fork-simplification-plan.md)：0.0.1 → 0.0.2 精简目标和落地记录，冻结不改。
+- `original-architecture.md`（现存于 Git 历史）：Fork 前架构历史基线，冻结不改。
+- `fork-simplification-plan.md`（现存于 Git 历史）：0.0.1 → 0.0.2 精简目标和落地记录，冻结不改。
 - [mcp-architecture.md](../../references/mcp-architecture.md)：MCP 生命周期、目录与 UI 投影。
 - [upstream-sync.md](../upstream-sync.md)：同步方法、原则、检查点和各批摘要的唯一总账。
 - 下文“九批范围闭合”表逐批链接到第 1～9 批记录；每份记录保存该批的逐提交分析、适配与验证证据。
@@ -65,7 +65,7 @@ Skills、记忆与备份等核心能力；继续拒绝赞助商、无关 Provide
 | 数据边界 | 本批无 Room schema 变更；旧 `contextMessageSize` 被安全忽略，新 `contextMessageLimit` 有默认值且异常值在使用时归一化 |
 | 许可证 | `LICENSE` 与检查点 `2d61ba95` 的纯 AGPL-3.0 blob 完全一致 |
 
-`original-architecture.md` 和 `fork-simplification-plan.md` 继续作为冻结历史基线，不用当前
+`original-architecture.md` 和 `fork-simplification-plan.md` 作为当时的冻结历史基线（文件现存于 Git 历史），不用当前
 实现反向改写。当前实现和偏离记录由 changelog、MCP 生命周期文档及逐批同步文档承接。
 
 ## 三、九批范围闭合

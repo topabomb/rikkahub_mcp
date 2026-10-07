@@ -24,7 +24,7 @@ Provider wire usage event
 - `UIMessage.usage` 是 durable Turn 累计的唯一事实；`UIMessagePart.Step.modelResult` 保存对应采样的 `StepUsage`、请求数与耗时。两者由同一已关闭请求事实派生，随 owning Assistant 消息通过同一 checkpoint 或终态事务提交，不互相反推、不建立第二账本。
 - UI 只显示投影，`MessageNodeDAO` / `StatsQueryService` 只查询 durable JSON；二者都不重新计算 usage，也不建立账本。
 
-禁止 Provider Adapter 跨请求求和、UI 按 chunk 或消息重算、旁路 DAO 写入、第二 usage 表、fallback 累计器和旧字段转发属性。
+各层只消费上述事实，不跨越归一化、累计与查询职责或建立第二账本。
 
 历史迁移无法恢复逐 Step 的真实请求数与耗时：`StepModelResult.usageCompleteness=LEGACY`、`providerRequestCount=0`、时间字段为 null，原消息累计 usage 原样保留。这里的 0 表示未观测历史请求数，不能当作新请求的实测记录，也不能据此覆盖保留的 Turn 累计。
 
@@ -198,8 +198,7 @@ Stats 表示“当前域在数据库仍保留的 Provider usage”，不是账�
 ## 9. 修改边界
 
 核心模型由 `Usage.kt` 的 `TokenUsage` / `ProviderUsageSnapshot` 定义，合并和累计在 `TokenUsageAccounting.kt`；Provider Adapter 产生单请求快照，
-`StepRunner` 交给原 Turn 提交链。变更计量语义时，核对 `RequestUsageReducerTest`、`TurnUsageTest`、
-协议 usage 测试及 `ChatMessageNerdLine` / `MessageNodeDAO` / `StatsQueryService` 的消费者口径。
+`StepRunner` 交给原 Turn 提交链。变更计量语义须核对单请求关闭、Turn 累计、协议映射与聊天/统计消费者的同一口径。
 
 协议映射由 Adapter 负责，累计和完整性只由 request / Turn owner 负责。修改字段时需同步
 Stats SQL、序列化与消费者；测试分层和门禁见 [测试策略](testing-strategy.md)。
