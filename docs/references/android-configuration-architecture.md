@@ -199,7 +199,7 @@ Gradle 配置阶段均核验两份 manifest 的主合同、Core 支持集合、�
 保留 Snapshot v4/v5 adapter 不等于承诺平台合同 1。四项只读 BuildConfig 字段为
 `PLATFORM_CONTRACT_VERSION`、`SUPPORTED_PLATFORM_CONTRACT_VERSIONS`、`CORE_BASELINE_VERSION`、
 `PLATFORM_CONTRACT_BASELINE_HASH`。关于页显示版本、主合同和基准 Core；它们不随连接的服务器变化，
-也不参与运行准入或持久化配置迁移。发行记录与原 APK 消费证据的生成方式见[测试策略](testing-strategy.md#apk-发行记录与-core-消费证据)。
+也不参与运行准入或持久化配置迁移。最终 APK 核验与已有消费测试的使用方式见[测试策略](testing-strategy.md#最终-apk-与-core-版本对应)。
 
 ### 按主体解析与使用偏好
 

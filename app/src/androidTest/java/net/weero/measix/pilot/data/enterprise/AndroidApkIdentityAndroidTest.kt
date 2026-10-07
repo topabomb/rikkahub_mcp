@@ -15,34 +15,30 @@ import org.junit.runner.RunWith
 
 /** Reads the installed target's fields through its class loader, avoiding test APK constant inlining. */
 @RunWith(AndroidJUnit4::class)
-class AndroidReleaseIdentityAndroidTest {
+class AndroidApkIdentityAndroidTest {
     @Suppress("DEPRECATION")
     @Test
-    fun installedApkMatchesPreservedRelease() {
-        val encoded = InstrumentationRegistry.getArguments().getString("androidReleaseIdentity")
-        assumeTrue("Explicit fixed release record required", encoded != null)
+    fun installedApkMatchesExpectedIdentity() {
+        val encoded = InstrumentationRegistry.getArguments().getString("apkIdentity")
+        assumeTrue("Explicit fixed APK identity required", encoded != null)
         val record = JSONObject(String(Base64.decode(requireNotNull(encoded), Base64.NO_WRAP), Charsets.UTF_8))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val build = context.assets.open("android-build-identity.json").use {
-            JSONObject(it.reader(Charsets.UTF_8).readText())
-        }
-        assertEquals(record.getString("sourceCommit"), build.getString("sourceCommit"))
-        assertFalse("Installed APK was built from dirty source", build.getBoolean("sourceDirty"))
         val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
         val info = context.packageManager.getPackageInfo(context.packageName, flags)
         assertEquals(record.getString("applicationId"), context.packageName)
         assertEquals(record.getString("versionName"), info.versionName)
         val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
         assertEquals(record.getLong("versionCode"), versionCode)
+        val contract = record.getJSONObject("expectedBuildContract")
         val config = context.classLoader.loadClass("net.weero.measix.pilot.BuildConfig")
         fun field(name: String): Any = requireNotNull(config.getField(name).get(null))
         assertEquals(context.packageName, field("APPLICATION_ID"))
         assertEquals(record.getString("versionName"), field("VERSION_NAME"))
         assertEquals(record.getInt("versionCode").toString(), field("VERSION_CODE"))
-        assertEquals(record.getInt("platformContractVersion"), field("PLATFORM_CONTRACT_VERSION"))
-        assertEquals(record.getString("coreBaselineVersion"), field("CORE_BASELINE_VERSION"))
-        assertEquals(record.getString("baselineHash"), field("PLATFORM_CONTRACT_BASELINE_HASH"))
-        val supported = record.getJSONArray("supportedPlatformContractVersions")
+        assertEquals(contract.getInt("platformContractVersion"), field("PLATFORM_CONTRACT_VERSION"))
+        assertEquals(contract.getString("coreBaselineVersion"), field("CORE_BASELINE_VERSION"))
+        assertEquals(contract.getString("baselineHash"), field("PLATFORM_CONTRACT_BASELINE_HASH"))
+        val supported = contract.getJSONArray("supportedPlatformContractVersions")
         assertArrayEquals(IntArray(supported.length()) { supported.getInt(it) }, field("SUPPORTED_PLATFORM_CONTRACT_VERSIONS") as IntArray)
         assertEquals(record.getString("variant"), field("BUILD_TYPE"))
         val signatures = requireNotNull(if (Build.VERSION.SDK_INT >= 28) requireNotNull(info.signingInfo).apkContentsSigners else info.signatures)

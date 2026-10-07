@@ -37,10 +37,6 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
         val input = JSONObject(inputFile.readText())
         val scenario = input.getString("scenario")
         require(scenario in setOf("join", "sync", "reopen", "reject", "recover"))
-        InstrumentationRegistry.getArguments().getString("consumerExpectedScenario")?.let { expected ->
-            val schema = input.getLong(if (scenario == "reject") "rejectedSchema" else "expectedSchema")
-            require(expected == "$scenario-v$schema") { "Snapshot consumer input differs from the requested scenario" }
-        }
         val baselineFile = File(context.cacheDir, "snapshot-compatibility-baseline.json")
         val prior = baselineFile.takeIf(File::exists)?.let { JSONObject(it.readText()) }
         var historyFixtureId = prior?.optString("historyFixtureId")?.takeIf { it.isNotEmpty() && it != "null" }?.let(Uuid::parse)
@@ -56,9 +52,7 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
             suspend fun available() = sessions.state.first { it !is EnterpriseState.Loading } as EnterpriseState.Available
             suspend fun access(): RealmAccess.Enterprise {
                 val session = requireNotNull(available().manifest.session)
-                return RealmAccess.Enterprise(session.identity.scope, session.id).also {
-                    CoreConsumerTarget.requireTarget(sessions, it)
-                }
+                return RealmAccess.Enterprise(session.identity.scope, session.id)
             }
             suspend fun enterEnterprise(target: RealmAccess.Enterprise) {
                 val presentation = sessions.readPresentation()

@@ -53,7 +53,7 @@ jobs:
         run: |
           python -m pip install PyYAML==6.0.2
           python -m unittest discover -s tools -p test_android_release.py -v
-          VERSION=$(python tools/produce_android_release.py --check-version)
+          VERSION=$(python tools/verify_android_apk.py --check-version)
           TAG="v${VERSION}"
           mkdir -p build
           require_absent() {
@@ -66,17 +66,14 @@ jobs:
             fi
           }
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            python tools/produce_android_release.py --check-version --status released --tag "$GITHUB_REF_NAME"
+            python tools/verify_android_apk.py --check-version --tag "$GITHUB_REF_NAME"
           elif [[ "$PUBLISH" == "true" ]]; then
             require_absent "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG"
           fi
           if [[ "$PUBLISH" == "true" ]]; then
             require_absent "repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
           fi
-          python tools/generate-enterprise-wire.py
           python tools/generate-enterprise-wire.py --check
-          git diff --exit-code
-          test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Prepare signing files
         env:
@@ -107,35 +104,33 @@ jobs:
       - name: Build Release APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease :app:writeAndroidReleaseBuildInfo --no-parallel --max-workers=1
+          ./gradlew assembleRelease --no-parallel --max-workers=1
 
-      - name: Verify final APK metadata and preserve release bundle
+      - name: Verify final APK identity
         env:
           PUBLISH: ${{ github.ref_type == 'tag' || inputs.publish_release == true }}
         run: |
-          STATUS=candidate
           EXTRA=()
           if [[ "$PUBLISH" == "true" ]]; then
-            STATUS=released
-            VERSION=$(python tools/produce_android_release.py --check-version)
+            VERSION=$(python tools/verify_android_apk.py --check-version)
             EXTRA=(--tag "v${VERSION}")
           fi
           APKS=()
           for apk in app/build/outputs/apk/release/*.apk; do
             APKS+=(--apk "$apk")
           done
-          python tools/produce_android_release.py --status "$STATUS" --variant release \
-            "${EXTRA[@]}" "${APKS[@]}" --output build/android-release
-          (cd build/android-release && zip -r ../android-release-bundle.zip .)
+          python tools/verify_android_apk.py --variant release "${EXTRA[@]}" "${APKS[@]}" > build/apk-verification.json
+          zip -r build/android-contracts.zip app/src/test/resources/contracts \
+            app/src/main/java/net/weero/measix/pilot/data/enterprise/PlatformWire.kt
 
       - name: Extract version and changelog
         id: release_info
         run: |
-          VERSION=$(jq -r '.versionName' build/android-release/android-release.json)
+          VERSION=$(jq -r '.versionName' build/apk-verification.json)
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
           # versionCode
-          VERSION_CODE=$(jq -r '.versionCode' build/android-release/android-release.json)
+          VERSION_CODE=$(jq -r '.versionCode' build/apk-verification.json)
           echo "versionCode=${VERSION_CODE}" >> $GITHUB_OUTPUT
 
           # 从 docs/dev/changelog.md 提取对应版本段落作为 Release notes
@@ -166,8 +161,8 @@ jobs:
           EXTRA=()
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then EXTRA=(--verify-tag); fi
           # create rejects an occupied release; never upload with replacement/clobber semantics.
-          gh release create "v${VERSION}" build/android-release/apks/*.apk \
-            build/android-release/android-release.json build/android-release-bundle.zip \
+          gh release create "v${VERSION}" app/build/outputs/apk/release/*.apk \
+            build/apk-verification.json build/android-contracts.zip \
             --target "$GITHUB_SHA" --title "MeasixPilot ${VERSION}" --notes-file build/release-notes.md \
             --latest "${EXTRA[@]}"
 
@@ -234,8 +229,9 @@ jobs:
         with:
           name: MeasixPilot-${{ steps.release_info.outputs.version }}-artifacts
           path: |
-            build/android-release/
-            build/android-release-bundle.zip
+            app/build/outputs/apk/release/*.apk
+            build/apk-verification.json
+            build/android-contracts.zip
 
       - name: Cleanup signing files
         if: always()

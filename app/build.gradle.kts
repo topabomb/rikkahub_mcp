@@ -3,7 +3,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
@@ -27,38 +26,6 @@ abstract class RenameApkTask : DefaultTask() {
         outputDir.get().asFile.listFiles()?.filter { it.name.startsWith("app-") && it.name.endsWith(".apk") }?.forEach { file ->
             val newName = file.name.replace(Regex("^app-"), "MeasixPilot_${versionName.get()}_")
             file.renameTo(File(file.parentFile, newName))
-        }
-    }
-}
-
-abstract class WriteAndroidReleaseBuildInfoTask : DefaultTask() {
-    @get:Input
-    abstract val identityJson: Property<String>
-
-    @get:org.gradle.api.tasks.OutputFile
-    abstract val destination: RegularFileProperty
-
-    @TaskAction
-    fun writeIdentity() {
-        destination.get().asFile.apply {
-            parentFile.mkdirs()
-            writeText(identityJson.get() + "\n", Charsets.UTF_8)
-        }
-    }
-}
-
-abstract class WriteAndroidBuildIdentityTask : DefaultTask() {
-    @get:Input
-    abstract val identityJson: Property<String>
-
-    @get:org.gradle.api.tasks.OutputDirectory
-    abstract val outputDir: DirectoryProperty
-
-    @TaskAction
-    fun writeIdentity() {
-        outputDir.get().asFile.apply {
-            mkdirs()
-            resolve("android-build-identity.json").writeText(identityJson.get() + "\n", Charsets.UTF_8)
         }
     }
 }
@@ -220,7 +187,7 @@ android {
 
     buildTypes {
         release {
-            testProguardFiles("src/androidTest/keepRules/consumer.keep")
+            testProguardFiles("src/androidTest/keepRules/release-test.keep")
             signingConfigs.findByName("release")?.let { signingConfig = it }
             optimization {
                 enable = true
@@ -278,36 +245,6 @@ tasks.register<RenameApkTask>("renameReleaseApk") {
     outputDir.set(layout.buildDirectory.dir("outputs/apk/release"))
 }
 tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy("renameReleaseApk") }
-
-val releaseBuildInfo = mapOf(
-    "sourceCommit" to providers.exec {
-        workingDir(rootDir)
-        commandLine("git", "rev-parse", "HEAD")
-    }.standardOutput.asText.get().trim(),
-    "sourceDirty" to providers.exec {
-        workingDir(rootDir)
-        commandLine("git", "status", "--porcelain", "--untracked-files=all")
-    }.standardOutput.asText.get().isNotBlank(),
-    "applicationId" to android.defaultConfig.applicationId,
-    "versionName" to android.defaultConfig.versionName,
-    "versionCode" to android.defaultConfig.versionCode,
-    "platformContractVersion" to pinnedBaseline["platformContractVersion"],
-    "supportedPlatformContractVersions" to supportedPlatformContracts,
-    "coreBaselineVersion" to pinnedBaseline["coreBaselineVersion"],
-    "baselineHash" to pinnedBaselineHash,
-)
-// The signed APK carries the build's source identity, so an old APK cannot claim a new HEAD.
-val generateAndroidBuildIdentity = tasks.register<WriteAndroidBuildIdentityTask>("generateAndroidBuildIdentity") {
-    outputDir.set(layout.buildDirectory.dir("generated/androidBuildIdentity/assets"))
-    identityJson.set(JsonOutput.prettyPrint(JsonOutput.toJson(releaseBuildInfo)))
-}
-androidComponents.onVariants { variant ->
-    variant.sources.assets?.addGeneratedSourceDirectory(generateAndroidBuildIdentity) { it.outputDir }
-}
-tasks.register<WriteAndroidReleaseBuildInfoTask>("writeAndroidReleaseBuildInfo") {
-    destination.set(layout.buildDirectory.file("release/build-info.json"))
-    identityJson.set(JsonOutput.prettyPrint(JsonOutput.toJson(releaseBuildInfo)))
-}
 
 composeCompiler {
     stabilityConfigurationFiles.add(
