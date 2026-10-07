@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonObject
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCapability
+import net.weero.measix.pilot.data.ai.mcp.McpCatalogCapability
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason
@@ -63,6 +64,8 @@ internal data class McpServerPresentation(
     val tools: List<McpToolPresentation>,
     val allowsAllTools: Boolean? = null,
     val directoryConfirmed: Boolean = false,
+    val connectionsPartiallyReady: Boolean = false,
+    val connectionDiagnostic: String? = null,
 ) {
     val scope: ConfigurationScope get() = access.scope
     val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
@@ -147,19 +150,33 @@ internal class McpQueryService(
 
 internal fun ExecutionConfigurationSnapshot.mcpPresentations(
     access: RealmAccess,
-    capabilities: Map<ConfigurationReference, McpRuntimeCapability>,
+    capabilities: Map<ConfigurationReference, McpCatalogCapability>,
 ): List<McpServerPresentation> {
     check(configuration.scope == access.scope)
     return configuration.catalog.values.filter {
         it.key.category == ConfigurationCategory.MCP || it.key.category == ConfigurationCategory.GATEWAY
     }.map { resource ->
-        val capability = capabilities[resource.key.reference] ?: McpRuntimeCapability.EMPTY
+        val resourceCapability = capabilities[resource.key.reference]
+        val connections = resourceCapability?.connections.orEmpty()
+        val callable = connections.filter { it.sessionCallable }
+        // Display readiness of this resource, never transfer one interaction's admission to another.
+        val representative = (callable.ifEmpty { connections }).minWithOrNull(
+            compareBy<McpRuntimeCapability> { connectionStatusPriority(it) }
+                .thenBy { (it.status as? McpStatus.RetryScheduled)?.retryInMs ?: 0L }
+                .thenBy { it.status.toString() },
+        )
+        val capability = McpRuntimeCapability(representative?.status ?: McpStatus.Idle,
+            resourceCapability?.catalog, callable.isNotEmpty())
+        val partiallyReady = callable.isNotEmpty() && callable.size < connections.size
+        val diagnostic = connections.mapNotNull { (it.status as? McpStatus.Error)?.let { error -> error.detail ?: error.message } }
+            .distinct().sorted().takeIf { it.isNotEmpty() }?.joinToString("\n\n")
         val managed = configuration.enterpriseConfiguration?.mcpServers?.find {
             it.id == (resource.key.reference as? ConfigurationReference.Enterprise)?.id
         }
         val user = userSettings.mcpServers.singleOrNull { it.id == resource.key.reference }
         if (user != null) user.toPresentation(capability).copy(
             access = access, unavailableReason = resource.access.unavailableReason,
+            connectionsPartiallyReady = partiallyReady, connectionDiagnostic = diagnostic,
         ) else McpServerPresentation(
             serverId = resource.key.reference, name = resource.name,
             enabled = resource.gatewayEnablement?.enabled ?: (resource.access.unavailableReason != ConfigurationUnavailableReason.RESOURCE_DISABLED),
@@ -175,8 +192,21 @@ internal fun ExecutionConfigurationSnapshot.mcpPresentations(
                 ?: capability.catalog?.tools.orEmpty().map { McpToolPresentation(it.name, it.description, it.inputSchema, true, false) },
             allowsAllTools = managed?.let { it.toolAccessMode == PlatformMcpDefinitionToolAccessMode.ALL },
             directoryConfirmed = capability.catalog != null,
+            connectionsPartiallyReady = partiallyReady, connectionDiagnostic = diagnostic,
         )
     }
+}
+
+private fun connectionStatusPriority(connection: McpRuntimeCapability): Int = when (connection.status) {
+    is McpStatus.Ready -> if (connection.sessionCallable) 0 else 8
+    is McpStatus.CatalogStale -> if (connection.sessionCallable) 1 else 7
+    McpStatus.NeedsAuthorization -> 2
+    is McpStatus.Error, McpStatus.CatalogRejectedEmpty -> 3
+    McpStatus.Authorizing -> 4
+    McpStatus.Connecting, McpStatus.Discovering, is McpStatus.Reconnecting -> 5
+    is McpStatus.RetryScheduled -> 6
+    McpStatus.WaitingNetwork -> 7
+    McpStatus.Idle -> 8
 }
 
 internal fun net.weero.measix.pilot.data.ai.mcp.McpServerConfig.toPresentation(

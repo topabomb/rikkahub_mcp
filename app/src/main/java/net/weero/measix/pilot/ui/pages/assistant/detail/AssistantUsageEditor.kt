@@ -34,6 +34,7 @@ import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import net.weero.measix.pilot.ui.components.ai.*
 import net.weero.measix.pilot.ui.components.ui.ErrorCard
+import net.weero.measix.pilot.ui.components.ui.SharedAssistantEditDialog
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import org.koin.compose.koinInject
@@ -223,18 +224,15 @@ internal fun AssistantUsageEditor(
         text = { Text(stringResource(R.string.assistant_usage_reset_description)) },
         confirmButton = { TextButton(enabled = !resetting, onClick = { resetting = true; scope.launch { try { if (onChange(AssistantPreferenceChange.ResetUsage).onFailure(onFailure).isSuccess) { reset = false; resetEpoch++ } } finally { resetting = false } } }) { Text(stringResource(android.R.string.ok)) } },
         dismissButton = { TextButton(enabled = !resetting, onClick = { reset = false }) { Text(stringResource(android.R.string.cancel)) } })
-    if (editShared) AlertDialog(onDismissRequest = { editShared = false },
-        title = { Text(stringResource(R.string.assistant_usage_shared_edit)) },
-        text = { Text(stringResource(R.string.assistant_usage_shared_warning)) },
-        confirmButton = { TextButton(onClick = {
+    if (editShared) SharedAssistantEditDialog(onDismiss = { editShared = false },
+        onConfirm = {
             try {
                 requireOriginal()
                 editShared = false
                 onEditSharedDefinition()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { editShared = false; onFailure(error) }
-        }) { Text(stringResource(android.R.string.ok)) } },
-        dismissButton = { TextButton(onClick = { editShared = false }) { Text(stringResource(android.R.string.cancel)) } })
+        })
 }
 
 /** The Skill directory is read only while its tab is present; a read failure cannot disable unrelated sections. */

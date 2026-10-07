@@ -19,6 +19,8 @@ internal data class AssistantMcpChoice(
     val allowsAllTools: Boolean? = null,
     val selectsAllTools: Boolean? = null,
     val directoryConfirmed: Boolean = false,
+    val connectionsPartiallyReady: Boolean = false,
+    val connectionDiagnostic: String? = null,
 ) {
     val hasCatalogTools: Boolean get() = tools.any { it.inputSchema != null }
     val isCallable: Boolean get() = unavailableReason == null && sessionCallable && tools.any { it.enabled }
@@ -46,7 +48,8 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
             assistant != null && id !in fixedMcpBindings && (id in selected || reason == null), reason,
             status?.status ?: McpStatus.Idle, status?.sessionCallable == true,
             tools, id in fixedMcpBindings, status?.allowsAllTools,
-            if (id in fixedMcpBindings) names == null else null, status?.directoryConfirmed == true)
+            if (id in fixedMcpBindings) names == null else null, status?.directoryConfirmed == true,
+            status?.connectionsPartiallyReady == true, status?.connectionDiagnostic)
     }
 }
 
@@ -54,5 +57,7 @@ internal fun List<McpServerPresentation>.assistantChoices(assistant: Assistant):
     AssistantMcpChoice(server.serverId, server.name, server.serverId in assistant.mcpServers,
         server.enabled || server.serverId in assistant.mcpServers,
         if (server.enabled) null else ConfigurationUnavailableReason.RESOURCE_DISABLED,
-        server.status, server.sessionCallable, server.tools)
+        server.status, server.sessionCallable, server.tools,
+        directoryConfirmed = server.directoryConfirmed,
+        connectionsPartiallyReady = server.connectionsPartiallyReady, connectionDiagnostic = server.connectionDiagnostic)
 }

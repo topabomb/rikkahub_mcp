@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.ui.pages.assistant.detail
 
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Delete01
 import androidx.compose.foundation.layout.Arrangement
@@ -16,10 +15,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -73,11 +71,11 @@ fun AssistantMemoryPage(id: String) {
     }
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val memories by vm.memories.collectAsStateWithLifecycle()
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     Scaffold(
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = {
                     Text(stringResource(R.string.assistant_page_tab_memory))
                 },
@@ -175,16 +173,19 @@ internal fun AssistantMemoryContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
             .padding(innerPadding)
-            .imePadding(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (onUpdateAssistant != null) {
             if (sharedDefaults) {
-                Text(stringResource(R.string.assistant_memory_shared_defaults), style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(R.string.assistant_memory_shared_defaults_notice), style = MaterialTheme.typography.bodySmall)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.assistant_memory_shared_defaults), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.assistant_memory_shared_defaults_notice),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             CardGroup {
                 item(
@@ -271,21 +272,28 @@ internal fun AssistantMemoryContent(
             }
 
         }
-        if (memorySeeds.isNotEmpty() || onUpdateAssistant == null) {
-            Text(stringResource(R.string.assistant_memory_seed_count, memorySeeds.size), style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(R.string.assistant_enterprise_memory_seed_description), style = MaterialTheme.typography.bodySmall)
-            if (memorySeeds.isEmpty()) Text(stringResource(R.string.assistant_memory_seed_empty), style = MaterialTheme.typography.bodySmall)
+        if (memorySeeds.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(R.string.assistant_memory_seed_count, memorySeeds.size), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.assistant_enterprise_memory_seed_description),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             memorySeeds.forEach { seed ->
                 key(seed.id) {
                     var expanded by remember(seed.content) { mutableStateOf(false) }
+                    var canExpand by remember(seed.content) { mutableStateOf(false) }
                     Card(colors = CustomColors.cardColorsOnSurfaceContainer, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                             androidx.compose.foundation.text.selection.SelectionContainer {
                                 Text(seed.content, maxLines = if (expanded) Int.MAX_VALUE else 3,
-                                    overflow = TextOverflow.Ellipsis)
+                                    style = MaterialTheme.typography.bodySmall,
+                                    overflow = TextOverflow.Ellipsis,
+                                    onTextLayout = { if (!expanded) canExpand = it.hasVisualOverflow })
                             }
-                            TextButton(onClick = { expanded = !expanded }) {
-                                Text(stringResource(if (expanded) R.string.assistant_memory_seed_collapse else R.string.assistant_memory_seed_expand))
+                            if (expanded || canExpand) {
+                                TextButton(onClick = { expanded = !expanded }) {
+                                    Text(stringResource(if (expanded) R.string.assistant_memory_seed_collapse else R.string.assistant_memory_seed_expand))
+                                }
                             }
                         }
                     }
@@ -295,16 +303,21 @@ internal fun AssistantMemoryContent(
 
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
+                .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = stringResource(R.string.assistant_runtime_memory_count, memories.records.size),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier
-                    .weight(1f)
-            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(R.string.assistant_runtime_memory_count, memories.records.size),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                memories.access?.address?.let { address ->
+                    Text(stringResource(R.string.assistant_runtime_memory_scope,
+                        stringResource(if (address.scope == ConfigurationScope.Personal) R.string.enterprise_personal else R.string.enterprise_space),
+                        stringResource(if (address.owner == MemoryOwner.RealmShared) R.string.assistant_memory_owner_shared else R.string.assistant_memory_owner_private)),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
 
             IconButton(
                 onClick = {
@@ -319,17 +332,10 @@ internal fun AssistantMemoryContent(
             }
         }
 
-        memories.access?.address?.let { address ->
-            Text(stringResource(R.string.assistant_runtime_memory_scope,
-                stringResource(if (address.scope == ConfigurationScope.Personal) R.string.enterprise_personal else R.string.enterprise_space),
-                stringResource(if (address.owner == MemoryOwner.RealmShared) R.string.assistant_memory_owner_shared else R.string.assistant_memory_owner_private)),
-                style = MaterialTheme.typography.bodySmall)
+        if (!assistant.enableMemory) {
+            Text(stringResource(R.string.assistant_runtime_memory_disabled),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (onUpdateAssistant == null) {
-            Text(stringResource(if (assistant.enableMemory) R.string.assistant_runtime_memory_enabled
-                else R.string.assistant_runtime_memory_disabled), style = MaterialTheme.typography.bodySmall)
-        }
-        Text(stringResource(R.string.assistant_runtime_memory_notice), style = MaterialTheme.typography.bodySmall)
 
         if (memories.unavailableReason != null) {
             androidx.compose.foundation.text.selection.SelectionContainer {
@@ -389,17 +395,21 @@ private fun MemoryItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
+                    text = "#${memory.id}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
                     text = memory.content,
-
                     maxLines = 5,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,

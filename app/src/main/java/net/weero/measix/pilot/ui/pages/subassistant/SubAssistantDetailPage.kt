@@ -59,7 +59,7 @@ import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.components.message.localizeSubAssistantReason
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
-import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
+import net.weero.measix.pilot.ui.components.ui.SharedAssistantEditDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.SubAssistantDetailUiState
@@ -124,7 +124,7 @@ fun SubAssistantDetailPage(
                 },
                 navigationIcon = { BackButton() },
                 actions = {
-                    if (targetAssistant != null) {
+                    if (targetAssistant?.id is me.rerere.common.configuration.ConfigurationReference.User) {
                         TextButton(
                             onClick = {
                                 if (source?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
@@ -167,8 +167,8 @@ fun SubAssistantDetailPage(
             )
         }
     }
-    if (pendingAssistantSettings && targetAssistant != null) {
-        SharedConfigurationEditDialog(
+    if (pendingAssistantSettings && targetAssistant?.id is me.rerere.common.configuration.ConfigurationReference.User) {
+        SharedAssistantEditDialog(
             onDismiss = { pendingAssistantSettings = false },
             onConfirm = {
                 pendingAssistantSettings = false

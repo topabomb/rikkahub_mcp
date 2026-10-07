@@ -130,6 +130,13 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             state = lazyListState
         ) {
+            item("shared_definition_notice") {
+                Text(
+                    stringResource(R.string.search_shared_definition_notice),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             items(settings.searchServices, key = { it.id.toString() }) { service ->
                 ReorderableItem(
                     state = reorderableState,

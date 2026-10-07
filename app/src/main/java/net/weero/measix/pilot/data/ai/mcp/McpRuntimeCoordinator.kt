@@ -98,6 +98,12 @@ private val ProcessLifecycleForegroundObserver = ForegroundObserver { action ->
 
 private val ProcessForegroundState = MutableStateFlow(true)
 
+/** Passive resource view; individual runtimes retain their own execution admission. */
+internal data class McpCatalogCapability(
+    val catalog: McpCatalogSnapshot?,
+    val connections: List<McpRuntimeCapability>,
+)
+
 /**
  * MCP 服务器连接管理器。
  *
@@ -259,7 +265,7 @@ class McpRuntimeCoordinator internal constructor(
     internal suspend fun readCatalogCapabilities(
         access: RealmAccess,
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
-    ): Map<ConfigurationReference, McpRuntimeCapability> {
+    ): Map<ConfigurationReference, McpCatalogCapability> {
         check(snapshot.configuration.scope == access.scope)
         catalogStore.awaitReady()
         return when (access) {
@@ -277,8 +283,10 @@ class McpRuntimeCoordinator internal constructor(
         access: RealmAccess,
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
         execution: EnterpriseExecution?,
-    ): Map<ConfigurationReference, McpRuntimeCapability> {
+    ): Map<ConfigurationReference, McpCatalogCapability> {
         val configuration = snapshot.configuration
+        val confirmedCatalogs = catalogs.value
+        val runtimeViews = runtimeCapabilities.value
         return configuration.catalog.values.filter {
             it.key.category == ConfigurationCategory.MCP || it.key.category == ConfigurationCategory.GATEWAY
         }.associate { resource ->
@@ -286,7 +294,7 @@ class McpRuntimeCoordinator internal constructor(
             val user = snapshot.userSettings.mcpServers.find { it.id == id }
             val gateway = configuration.enterpriseConfiguration?.gateways?.find { it.id == (id as? ConfigurationReference.Enterprise)?.id }
             val key = McpCatalogKey(if (id is ConfigurationReference.User) net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal else configuration.scope, id)
-            val catalog = catalogs.value[key]?.takeIf {
+            val catalog = confirmedCatalogs[key]?.takeIf {
                 when (id) {
                     is ConfigurationReference.User -> user != null && it.definitionDigest == user.mcpDefinitionDigest()
                     is ConfigurationReference.Enterprise -> {
@@ -301,13 +309,11 @@ class McpRuntimeCoordinator internal constructor(
                     }
                 }
             }
-            val connections = runtimeCapabilities.value.filter { (key, value) ->
+            val connections = runtimeViews.filter { (key, value) ->
                 key.serverId == id && key.access == (access as? RealmAccess.Enterprise) &&
                     (value.catalog == null || value.catalog.definitionDigest == catalog?.definitionDigest)
-            }.values
-            // A resource may serve several interactions; no individual connection represents them all.
-            val session = connections.singleOrNull()
-            id to McpRuntimeCapability(session?.status ?: McpStatus.Idle, catalog, session?.sessionCallable == true)
+            }.values.toList()
+            id to McpCatalogCapability(catalog, connections)
         }
     }
 
@@ -320,7 +326,7 @@ class McpRuntimeCoordinator internal constructor(
     private fun inspectCatalogCapabilities(
         snapshot: net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot,
         assistant: Assistant,
-        capabilities: Map<ConfigurationReference, McpRuntimeCapability>,
+        capabilities: Map<ConfigurationReference, McpCatalogCapability>,
     ): TurnMcpCapabilitySnapshot {
         val configuration = snapshot.configuration
         check(configuration.assistants[assistant.id] == assistant &&

@@ -97,7 +97,7 @@ import net.weero.measix.pilot.ui.components.ui.BackupReminderCard
 import net.weero.measix.pilot.ui.components.ui.Greeting
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.UIAvatar
-import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
+import net.weero.measix.pilot.ui.components.ui.SharedAssistantEditDialog
 import net.weero.measix.pilot.ui.components.ui.UpdateCard
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.EditStateContent
@@ -794,7 +794,7 @@ fun ChatDrawerContent(
     } }
 
     pendingSharedNavigation?.let { destination ->
-        SharedConfigurationEditDialog(
+        SharedAssistantEditDialog(
             onDismiss = { pendingSharedNavigation = null },
             onConfirm = {
                 pendingSharedNavigation = null

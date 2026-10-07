@@ -49,7 +49,7 @@ class McpQueryServiceTest {
         val catalog = McpCatalogSnapshot(access.scope, id, 1, "definition", "catalog", listOf(read, changed,
             McpCatalogTool("unapproved", inputSchema = read.inputSchema)), McpManagedCatalog(packet.configuration.generation))
         val capability = McpRuntimeCapability(McpStatus.Ready(3, 1), catalog, true)
-        val row = snapshot.mcpPresentations(access, mapOf(id to capability)).single { it.serverId == id }
+        val row = snapshot.mcpPresentations(access, mapOf(id to McpCatalogCapability(catalog, listOf(capability)))).single { it.serverId == id }
         assertEquals(listOf("read", "changed"), row.tools.map { it.name })
         assertEquals(1, row.tools.count { it.enabled })
         assertEquals(McpToolUnavailableReason.CONTRACT_CHANGED, row.tools.last().unavailableReason)
@@ -63,10 +63,33 @@ class McpQueryServiceTest {
         assertEquals(false, choice.selectsAllTools)
         val noDirectory = snapshot.mcpPresentations(access, emptyMap()).single { it.serverId == id }
         assertEquals(McpToolUnavailableReason.DIRECTORY_UNAVAILABLE, noDirectory.tools.first().unavailableReason)
-        val missing = snapshot.mcpPresentations(access, mapOf(id to capability.copy(catalog = catalog.copy(tools = emptyList()))))
+        val missing = snapshot.mcpPresentations(access, mapOf(id to McpCatalogCapability(catalog.copy(tools = emptyList()), listOf(capability))))
             .single { it.serverId == id }
         assertTrue(missing.directoryConfirmed)
         assertTrue(missing.tools.all { !it.enabled && it.unavailableReason == McpToolUnavailableReason.MISSING })
+        fun present(vararg connections: McpRuntimeCapability) = snapshot.mcpPresentations(access,
+            mapOf(id to McpCatalogCapability(catalog, connections.toList()))).single { it.serverId == id }
+        val idle = present()
+        assertEquals(McpStatus.Idle, idle.status)
+        assertTrue(idle.directoryConfirmed)
+        assertFalse(idle.sessionCallable)
+        val ready = present(capability, capability)
+        assertEquals(capability.status, ready.status)
+        assertTrue(ready.sessionCallable)
+        assertFalse(ready.connectionsPartiallyReady)
+        val failure = capability.copy(status = McpStatus.Error("HTTP 403", "Original HTTP 403 cause and stack"), sessionCallable = false)
+        val partial = present(capability, failure)
+        assertTrue(partial.connectionsPartiallyReady)
+        assertEquals((failure.status as McpStatus.Error).detail, partial.connectionDiagnostic)
+        assertEquals(partial, present(failure, capability))
+        val partialChoice = resolved.conversationConfiguration(target).mcpChoices(listOf(partial)).single { it.serverId == id }
+        assertTrue(partialChoice.connectionsPartiallyReady)
+        assertEquals(partial.connectionDiagnostic, partialChoice.connectionDiagnostic)
+        val retry = capability.copy(status = McpStatus.RetryScheduled(1, 3, 5_000), sessionCallable = false)
+        assertEquals(retry.status, present(retry, retry.copy(status = McpStatus.RetryScheduled(1, 3, 10_000))).status)
+        assertEquals(McpStatus.Connecting, present(retry, capability.copy(status = McpStatus.Connecting, sessionCallable = false)).status)
+        assertEquals(failure.status, present(failure, retry).status)
+        assertFalse(present(failure, retry).sessionCallable)
     }
 
     @Test

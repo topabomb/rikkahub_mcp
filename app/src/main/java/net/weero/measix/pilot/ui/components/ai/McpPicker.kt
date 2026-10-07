@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.clip
@@ -40,7 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.util.fastFilter
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Alert01
-import me.rerere.hugeicons.stroke.Icon1stBracket
+import me.rerere.hugeicons.stroke.Unlink01
 import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.hugeicons.stroke.Clock02
 import me.rerere.hugeicons.stroke.Settings03
@@ -225,13 +226,17 @@ internal fun McpPicker(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         when (status) {
-                            McpStatus.Idle -> Icon(HugeIcons.Icon1stBracket, null)
+                            McpStatus.Idle -> Icon(HugeIcons.Unlink01, null)
                             McpStatus.Connecting, McpStatus.Discovering -> if (server.hasCatalogTools || server.directoryConfirmed) {
-                                Icon(HugeIcons.McpServer, null)
+                                Icon(HugeIcons.Clock02, null)
                             } else {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             }
-                            is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
+                            is McpStatus.Ready -> Icon(when {
+                                server.connectionsPartiallyReady -> HugeIcons.Clock02
+                                !server.sessionCallable -> HugeIcons.Unlink01
+                                else -> HugeIcons.McpServer
+                            }, null)
                             is McpStatus.Reconnecting -> if (status.maintenance || server.hasCatalogTools || server.directoryConfirmed) {
                                 Icon(HugeIcons.Clock02, null)
                             } else {
@@ -263,27 +268,38 @@ internal fun McpPicker(
                         }
                     }
                     // Connection and admission describe the whole server; cached tools do not prove it is callable.
-                    Text(
-                        text = server.unavailableReason?.let { configurationUnavailableText(it) }
-                            ?: mcpServerStatusText(status, server.tools, server.directoryConfirmed, server.sessionCallable),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = if (status is McpStatus.Error && server.unavailableReason == null) 3 else Int.MAX_VALUE,
-                        overflow = TextOverflow.Ellipsis,
-                        color = if (server.unavailableReason != null || status is McpStatus.Error ||
-                            status == McpStatus.NeedsAuthorization || status == McpStatus.CatalogRejectedEmpty ||
-                            (status is McpStatus.Ready && server.sessionCallable && server.tools.any { it.unavailableReason != null } &&
-                                server.tools.none { it.enabled })) {
-                            MaterialTheme.colorScheme.error
-                        } else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (status is McpStatus.Error && server.unavailableReason == null) {
-                        DiagnosticDisclosure(
-                            detail = status.detail ?: status.message ?: stringResource(R.string.error_title_operation),
-                            title = server.name,
-                            contentPadding = PaddingValues(horizontal = 0.dp),
-                        )
+                    val diagnostic = server.connectionDiagnostic ?: (status as? McpStatus.Error)?.let {
+                        it.detail ?: it.message ?: stringResource(R.string.error_title_operation)
                     }
-                    if (status !is McpStatus.Ready && server.directoryConfirmed) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            modifier = Modifier.weight(1f),
+                            text = server.unavailableReason?.let { configurationUnavailableText(it) }
+                                ?: mcpServerStatusText(status, server.tools, server.directoryConfirmed, server.sessionCallable,
+                                    server.connectionsPartiallyReady),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = if (status is McpStatus.Error && server.unavailableReason == null) 3 else Int.MAX_VALUE,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (server.unavailableReason != null || status is McpStatus.Error ||
+                                status == McpStatus.NeedsAuthorization || status == McpStatus.CatalogRejectedEmpty ||
+                                (status is McpStatus.Ready && server.sessionCallable && server.tools.any { it.unavailableReason != null } &&
+                                    server.tools.none { it.enabled })) {
+                                MaterialTheme.colorScheme.error
+                            } else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (diagnostic != null && server.unavailableReason == null) {
+                            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                                DiagnosticDisclosure(
+                                    detail = diagnostic,
+                                    title = server.name,
+                                    label = stringResource(R.string.mcp_connection_details),
+                                    modifier = Modifier.widthIn(max = 120.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                    if ((status !is McpStatus.Ready || server.connectionsPartiallyReady) && server.directoryConfirmed) {
                         Text(
                             if (server.tools.isEmpty()) stringResource(R.string.mcp_managed_empty_directory)
                             else stringResource(R.string.mcp_enabled_tools_count, server.tools.count { it.enabled }, server.tools.size),
@@ -316,7 +332,8 @@ internal fun mcpServerStatusText(
     tools: List<McpToolPresentation>,
     directoryConfirmed: Boolean,
     sessionCallable: Boolean,
-): String = when (status) {
+    connectionsPartiallyReady: Boolean = false,
+): String = if (connectionsPartiallyReady) stringResource(R.string.mcp_status_partially_connected) else when (status) {
     McpStatus.Idle -> stringResource(
         if (!directoryConfirmed && tools.none { it.inputSchema != null }) R.string.mcp_tool_directory_unavailable
         else R.string.mcp_status_idle,

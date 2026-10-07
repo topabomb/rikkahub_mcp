@@ -15,7 +15,7 @@ import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Image02
-import me.rerere.hugeicons.stroke.MessageBlocked
+import me.rerere.hugeicons.stroke.Unlink01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Console
 import me.rerere.hugeicons.stroke.Delete01
@@ -540,11 +540,14 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
             server.unavailableReason?.let {
                 Text(configurationUnavailableText(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            if (server.unavailableReason == null && (server.status !is McpStatus.Ready || server.tools.isEmpty())) {
+            if (server.unavailableReason == null && (server.status !is McpStatus.Ready || server.tools.isEmpty() || server.connectionsPartiallyReady)) {
+                val diagnostic = server.connectionDiagnostic ?: (server.status as? McpStatus.Error)?.let { it.detail ?: it.message ?: failureText }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (server.isBusy) CircularProgressIndicator(Modifier.size(20.dp))
                     Text(
-                        mcpServerStatusText(server.status, server.tools, server.directoryConfirmed, server.sessionCallable),
+                        modifier = Modifier.weight(1f),
+                        text = mcpServerStatusText(server.status, server.tools, server.directoryConfirmed, server.sessionCallable,
+                            server.connectionsPartiallyReady),
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = if (server.status is McpStatus.Error) 3 else Int.MAX_VALUE,
                         overflow = TextOverflow.Ellipsis,
@@ -552,10 +555,14 @@ private fun ManagedMcpServerItem(server: McpServerPresentation, selection: Realm
                             server.status == McpStatus.CatalogRejectedEmpty) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                (server.status as? McpStatus.Error)?.let { error ->
-                    DiagnosticDisclosure(detail = error.detail ?: error.message ?: failureText, title = server.name,
-                        contentPadding = PaddingValues(horizontal = 0.dp))
+                    diagnostic?.let {
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                            DiagnosticDisclosure(detail = it, title = server.name,
+                                label = stringResource(R.string.mcp_connection_details),
+                                modifier = Modifier.widthIn(max = 120.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp))
+                        }
+                    }
                 }
             }
             server.gatewayEnablement?.let { gateway ->
@@ -614,19 +621,19 @@ private fun McpServerItem(
             verticalAlignment = Alignment.Top,
         ) {
             when (status) {
-                McpStatus.Idle -> Icon(HugeIcons.MessageBlocked, null)
+                McpStatus.Idle -> Icon(HugeIcons.Unlink01, null)
                 McpStatus.Connecting -> if (presentation?.hasCatalogTools == true) {
-                    Icon(HugeIcons.McpServer, null)
+                    Icon(HugeIcons.Clock02, null)
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
 
                 McpStatus.Discovering -> if (presentation?.hasCatalogTools == true) {
-                    Icon(HugeIcons.McpServer, null)
+                    Icon(HugeIcons.Clock02, null)
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
-                is McpStatus.Ready -> Icon(HugeIcons.McpServer, null)
+                is McpStatus.Ready -> Icon(if (presentation?.sessionCallable == true) HugeIcons.McpServer else HugeIcons.Unlink01, null)
                 is McpStatus.Reconnecting -> if (status.maintenance || presentation?.hasCatalogTools == true) {
                     Icon(HugeIcons.Clock02, null)
                 } else {

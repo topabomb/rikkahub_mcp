@@ -8,16 +8,16 @@ import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 
 @Composable
-internal fun SharedConfigurationEditDialog(
+internal fun SharedAssistantEditDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.configuration_shared_edit_title)) },
-        text = { Text(stringResource(R.string.configuration_shared_edit_warning)) },
+        title = { Text(stringResource(R.string.assistant_usage_shared_edit)) },
+        text = { Text(stringResource(R.string.assistant_usage_shared_warning)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(android.R.string.ok)) }
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.configuration_continue_edit)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(android.R.string.cancel)) }

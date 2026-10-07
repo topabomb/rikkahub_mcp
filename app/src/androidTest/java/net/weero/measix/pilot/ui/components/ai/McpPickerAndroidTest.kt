@@ -81,6 +81,12 @@ class McpPickerAndroidTest {
         compose.runOnIdle { state.value = state.value.copy(sessionCallable = true) }
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_ready, 1)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(connectionsPartiallyReady = true) }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_partially_connected)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_ready, 1)).assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(status = McpStatus.Idle, sessionCallable = false, connectionsPartiallyReady = false) }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_idle)).assertIsDisplayed()
     }
 
     @Test fun longListKeepsTheLastServerAndItsOriginalCommandReachable() {
@@ -95,13 +101,16 @@ class McpPickerAndroidTest {
 
     @Test fun compactConnectionErrorRetainsFullDetailsAndOriginalSelection() {
         val detail = (1..20).joinToString("\n") { "Original diagnostic line $it" }
-        val server = choice().copy(status = McpStatus.Error("Connection failed", detail), sessionCallable = false)
+        val server = choice().copy(connectionsPartiallyReady = true, connectionDiagnostic = detail)
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
                 McpPicker(listOf(server), onToggle = { _, _ -> error("fixed binding") })
             }
         } }
-        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performClick()
+        val disclosure = compose.onNodeWithText(compose.activity.getString(R.string.mcp_connection_details))
+        val minimumTouch = 48f * compose.activity.resources.displayMetrics.density
+        assertTrue("Compact diagnostics retains a 48dp touch target", disclosure.fetchSemanticsNode().touchBoundsInRoot.height >= minimumTouch)
+        disclosure.performClick()
         compose.onNodeWithText(detail).assertExists()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
         compose.onNodeWithContentDescription(server.name).assertIsOn().assertIsNotEnabled()

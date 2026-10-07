@@ -147,7 +147,7 @@ import net.weero.measix.pilot.ui.components.ai.rememberModelListState
 import net.weero.measix.pilot.ui.components.ai.completion.WorkspaceCompletionProvider
 import net.weero.measix.pilot.ui.components.ai.useCropLauncher
 import net.weero.measix.pilot.ui.components.ui.KeepScreenOn
-import net.weero.measix.pilot.ui.components.ui.SharedConfigurationEditDialog
+import net.weero.measix.pilot.ui.components.ui.SharedAssistantEditDialog
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
@@ -657,9 +657,6 @@ private fun ChatPageContent(
     var pendingSharedNavigation by remember(target) { mutableStateOf<Screen?>(null) }
     val enterpriseContext = target?.conversation?.selection?.access?.scope is
         net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise
-    val navigateToSharedConfiguration: (Screen) -> Unit = { destination ->
-        if (enterpriseContext) pendingSharedNavigation = destination else navController.navigate(destination)
-    }
     val workspaceFlow = remember(target, workspaceQueryService, readRetryRevision) {
         kotlinx.coroutines.flow.flow<UiState<List<net.weero.measix.pilot.service.workspace.WorkspaceUiModel>>> {
             emit(UiState.Loading)
@@ -930,7 +927,7 @@ private fun ChatPageContent(
                         onUpdateChatModel = { commitPreference(configuration.target, AssistantPreferenceChange.Model(it.id)).getOrThrow() },
                         onUpdateReasoning = { changePreference(AssistantPreferenceChange.Reasoning(it)) },
                         onUpdateSearchService = { id -> scope.launch { acceptRequestConfigurationResult(vm.selectSearchService(configuration.target, id)) } },
-                        onManageSearchServices = { navigateToSharedConfiguration(Screen.SettingSearch) },
+                        onManageSearchServices = { navController.navigate(Screen.SettingSearch) },
                         onMoreClick = {
                             showFilesSheet = true
                         },
@@ -1023,7 +1020,7 @@ private fun ChatPageContent(
                     target?.let { original -> scope.launch { acceptRequestConfigurationResult(vm.updateCustomSystemPrompt(original, newPrompt)) } }
                 },
                 onProviderConfigClick = {
-                    navigateToSharedConfiguration(Screen.SettingProvider)
+                    navController.navigate(Screen.SettingProvider)
                 },
                 onReadinessModelClick = {
                     if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
@@ -1093,7 +1090,7 @@ private fun ChatPageContent(
                 } },
                 onConfigurationResult = { acceptRequestConfigurationResult(it) { modalToaster.show(configurationSavedMessage) } },
                 feedback = modalToaster,
-                onManageSharedConfiguration = navigateToSharedConfiguration,
+                onManageSharedConfiguration = { navController.navigate(it) },
                 onDismiss = { showFilesSheet = false },
             )
         }
@@ -1108,7 +1105,7 @@ private fun ChatPageContent(
                 feedback = modalToaster,
                 onNavigateToSettings = {
                     showMcpPicker = false
-                    navigateToSharedConfiguration(Screen.SettingMcp)
+                    navController.navigate(Screen.SettingMcp)
                 },
                 onDismiss = { showMcpPicker = false },
             )
@@ -1167,7 +1164,8 @@ private fun ChatPageContent(
                 onDismiss = { assistantPreview = null },
                 onEdit = (preview.id as? ConfigurationReference.User)?.let { id -> {
                     assistantPreview = null
-                    navigateToSharedConfiguration(Screen.AssistantDetail(id.toString()))
+                    val destination = Screen.AssistantDetail(id.toString())
+                    if (enterpriseContext) pendingSharedNavigation = destination else navController.navigate(destination)
                 } },
             )
         }
@@ -1186,9 +1184,9 @@ private fun ChatPageContent(
                         showUsageEditor = false
                         navController.navigate(Screen.AssistantDetail(configuration.target.assistantId.toString()))
                     },
-                    onManageQuickMessages = { navigateToSharedConfiguration(Screen.QuickMessages) },
-                    onManagePrompts = { navigateToSharedConfiguration(Screen.Prompts) },
-                    onManageSkills = { navigateToSharedConfiguration(Screen.Skills) },
+                    onManageQuickMessages = { navController.navigate(Screen.QuickMessages) },
+                    onManagePrompts = { navController.navigate(Screen.Prompts) },
+                    onManageSkills = { navController.navigate(Screen.Skills) },
                     onOpenModelPicker = {
                         showUsageEditor = false
                         modelListState.open()
@@ -1212,7 +1210,7 @@ private fun ChatPageContent(
                 },
                 onManage = {
                     showWorkspaceSheet = false
-                    navigateToSharedConfiguration(Screen.Workspaces)
+                    navController.navigate(Screen.Workspaces)
                 },
                 onDismiss = {
                     showWorkspaceSheet = false
@@ -1229,7 +1227,7 @@ private fun ChatPageContent(
                 onDismiss = { configurationError = null })
         }
         pendingSharedNavigation?.let { destination ->
-            SharedConfigurationEditDialog(
+            SharedAssistantEditDialog(
                 onDismiss = { pendingSharedNavigation = null },
                 onConfirm = {
                     pendingSharedNavigation = null

@@ -341,7 +341,12 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 按域目录通过 `ConfigurationQueryService` 读取原配置，复用 Coordinator 的 `readCatalogCapabilities` 验证完整主体、generation、surface 和当前 binding 摘要。
 目录行携带原 `RealmAccess`，聊天按原 Session 匹配；企业定义没有可编辑的 `McpServerConfig`，也不暴露 endpoint/header/credential。
 读取失败发布 `McpCatalogReadState.Unavailable`，之后的 owner 变化可以恢复观察；私有 Applied revision 单独唤醒读取。
-选中目录在选择变化时先清空，停止订阅后不保留旧企业 replay，重开先重新授权。多个在途连接不能被任一单独状态冒充为整个资源的连接状态；已确认工具目录独立显示。
+选中目录在选择变化时先清空，停止订阅后不保留旧企业 replay，重开先重新授权。
+`McpCatalogCapability` 保留同一资源、原 Session 和定义摘要匹配的全部连接，个人维护连接不借给企业投影。
+`McpQueryService` 只读汇总：没有连接显示未连接；存在可调用连接时显示就绪，只有部分可调用时显示部分连接就绪。
+全部不可调用时优先保留授权或失败提示，其次显示正在连接、重试和等待网络；多个重试显示最近的一次。
+错误详情合并并保留原诊断，已确认工具目录独立显示。该汇总不写回 Runtime，也不代替任何 interaction 的调用准入。
+个人与企业选择器使用相同状态图标：未连接使用断开的链条，就绪使用 MCP 图标，后台连接或重试使用时钟，失败或待授权使用警示图标。
 
 企业 MCP 卡片没有编辑、删除、关闭、OAuth 或单工具策略入口；用户定义始终可管理，企业准入被禁止时显示原因。
 Gateway 按发布 policy 对完整工具对启停，REQUIRED 只读；写入携带渲染时的 `RealmSelection` 并复验原选择版本，等待提交时禁用重复操作。
