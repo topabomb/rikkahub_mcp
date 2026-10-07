@@ -2141,4 +2141,6 @@
   <string name="mcp_catalog_refreshing">Refreshing tools; previous directory retained</string>
   <string name="mcp_refresh_personal">Refresh my MCPs</string>
   <string name="mcp_readiness_on_demand">%1$d selected · connects when used</string>
+  <string name="about_page_platform_contract">Platform contract: %1$d</string>
+  <string name="about_page_core_baseline">Baseline Core: %1$s</string>
 </resources>

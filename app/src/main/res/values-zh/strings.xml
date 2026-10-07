@@ -2133,4 +2133,6 @@
   <string name="mcp_catalog_refreshing">正在刷新工具，保留上次目录</string>
   <string name="mcp_refresh_personal">刷新我的 MCP</string>
   <string name="mcp_readiness_on_demand">已选择 %1$d 项 · 使用时连接</string>
+  <string name="about_page_platform_contract">平台合同：%1$d</string>
+  <string name="about_page_core_baseline">基准 Core：%1$s</string>
 </resources>

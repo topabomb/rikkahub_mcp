@@ -188,6 +188,19 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 
 接入与配置 wire 以固定的 Core 导出 [Client Control 合同](../../app/src/test/resources/contracts/platform/client-control.openapi.yaml)及其 [来源 manifest](../../app/src/test/resources/contracts/platform/manifest.json)核对。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
 
+APK 的平台合同身份来自同目录 `protocol-baseline.json` 和 Portal manifest。`tools/android_contract.py` 与
+Gradle 配置阶段均核验两份 manifest 的主合同、Core 支持集合、基准 Core 和基线 LF SHA-256 一致，
+并校验 Client source/format/sourceHash、Portal Bridge 版本及完整材料的来源与实际字节摘要。
+`generate-enterprise-wire.py` 在解析 schema 前完成校验，继续保留 `PlatformWire.kt` 的 Core source SHA256 header。
+缺失、错误类型或不一致直接失败；普通构建只读取仓库内材料，不调用 Python、其他 checkout 或网络。
+
+`app/build.gradle.kts` 唯一维护产品版本，并独立声明 Android 支持的合同集合。当前目标为
+`0.0.20 / 20 → 平台合同 2 → Core 语义基准 0.2.0-preview.23`，Android 仅承诺 `[2]`；
+保留 Snapshot v4/v5 adapter 不等于承诺平台合同 1。四项只读 BuildConfig 字段为
+`PLATFORM_CONTRACT_VERSION`、`SUPPORTED_PLATFORM_CONTRACT_VERSIONS`、`CORE_BASELINE_VERSION`、
+`PLATFORM_CONTRACT_BASELINE_HASH`。关于页显示版本、主合同和基准 Core；它们不随连接的服务器变化，
+也不参与运行准入或持久化配置迁移。发行记录与原 APK 消费证据的生成方式见[测试策略](testing-strategy.md#apk-发行记录与-core-消费证据)。
+
 ### 按主体解析与使用偏好
 
 `ConfigurationQueryService` 组合 `UserSettingsDocument`、原 Session 和 Applied；`ConfigurationResolver` 按完整 Deployment/User 产生 `ResolvedConfiguration`，只做纯派生，不落盘镜像。用户定义保持一份；企业助手定义、system prompt 与固定 MCP 只读，本域允许的模型和使用偏好通过 typed 命令写回用户文档。助手模型的默认、空间默认、指定引用必须保持可区分，失效的显式引用不能静默替换。所有列表、查询和命令携带原 `RealmSelection` 或 `RealmAccess`；等待 Settings、数据库、文件或网络后须重新验证原主体，切域返回也不恢复旧授权。

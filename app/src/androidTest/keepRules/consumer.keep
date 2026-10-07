@@ -1,0 +1,10 @@
+# AndroidJUnitRunner loads this listener from its explicit instrumentation argument.
+-keep class net.weero.measix.pilot.data.enterprise.AndroidConsumerJUnitListener { *; }
+
+# MockK's transitive desktop agent has optional JNA/JVM attachment paths; Android uses its Android agent.
+# These rules apply only to the test APK, never the optimized application.
+-dontwarn com.sun.jna.**
+-dontwarn java.lang.instrument.**
+# Optional annotation classes in transitive ByteBuddy/JUnit libraries have no runtime consumer here.
+-dontwarn edu.umd.cs.findbugs.annotations.**
+-dontwarn org.apiguardian.api.**

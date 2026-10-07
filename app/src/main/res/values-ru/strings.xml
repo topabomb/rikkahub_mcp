@@ -2133,4 +2133,6 @@
   <string name="mcp_catalog_refreshing">Обновление инструментов; сохранён предыдущий каталог</string>
   <string name="mcp_refresh_personal">Обновить мои MCP</string>
   <string name="mcp_readiness_on_demand">Выбрано: %1$d · подключение при использовании</string>
+  <string name="about_page_platform_contract">Контракт платформы: %1$d</string>
+  <string name="about_page_core_baseline">Базовая версия Core: %1$s</string>
 </resources>

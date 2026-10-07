@@ -9,11 +9,13 @@ import json
 import re
 import sys
 import yaml
+from android_contract import validate_contracts
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "app/src/test/resources/contracts/platform/client-control.openapi.yaml"
 MANIFEST = ROOT / "app/src/test/resources/contracts/platform/manifest.json"
 OUTPUT = ROOT / "app/src/main/java/net/weero/measix/pilot/data/enterprise/PlatformWire.kt"
+validate_contracts()
 SCHEMAS = yaml.safe_load(SOURCE.read_text(encoding="utf-8"))["components"]["schemas"]
 manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 source_hash = hashlib.sha256(SOURCE.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
@@ -161,11 +163,14 @@ package net.weero.measix.pilot.data.enterprise
 import kotlinx.serialization.Serializable
 
 '''
-payload = (header + "\n\n".join(definitions.values()) + "\n").replace("\n", "\r\n").encode("utf-8")
+canonical = (header + "\n\n".join(definitions.values()) + "\n").encode("utf-8")
 if sys.argv[1:] == ["--check"]:
-    if OUTPUT.read_bytes() != payload:
+    if OUTPUT.read_bytes().replace(b"\r\n", b"\n") != canonical:
         raise SystemExit("PlatformWire.kt differs from the Core schema export; regenerate it")
 elif sys.argv[1:]:
     raise SystemExit("usage: generate-enterprise-wire.py [--check]")
 else:
+    # Keep the checkout's text convention: Git exports LF on CI and CRLF on Windows.
+    crlf = b"\r\n" in OUTPUT.read_bytes() if OUTPUT.exists() else sys.platform == "win32"
+    payload = canonical.replace(b"\n", b"\r\n") if crlf else canonical
     OUTPUT.write_bytes(payload)

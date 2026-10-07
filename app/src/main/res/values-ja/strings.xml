@@ -2133,4 +2133,6 @@
   <string name="mcp_catalog_refreshing">ツールを更新中。前回の一覧を保持しています</string>
   <string name="mcp_refresh_personal">自分の MCP を更新</string>
   <string name="mcp_readiness_on_demand">%1$d 件選択済み · 使用時に接続</string>
+  <string name="about_page_platform_contract">プラットフォーム契約：%1$d</string>
+  <string name="about_page_core_baseline">基準 Core：%1$s</string>
 </resources>

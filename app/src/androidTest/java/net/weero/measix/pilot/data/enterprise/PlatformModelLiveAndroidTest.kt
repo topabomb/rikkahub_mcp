@@ -43,6 +43,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            CoreConsumerTarget.requireTarget(sessions, access)
             val platform = koin.get<net.weero.measix.pilot.service.PlatformEnterpriseService>()
             platform.synchronize(access)
             val configuration = requireNotNull(koin.get<ModelExecutionService>().read(access).configuration.enterpriseConfiguration)
@@ -83,6 +84,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            CoreConsumerTarget.requireTarget(sessions, access)
             val platform = koin.get<net.weero.measix.pilot.service.PlatformEnterpriseService>()
             platform.synchronize(access)
             val configuration = requireNotNull(koin.get<ModelExecutionService>().read(access).configuration.enterpriseConfiguration)
@@ -130,6 +132,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            CoreConsumerTarget.requireTarget(sessions, access)
             koin.get<net.weero.measix.pilot.service.PlatformEnterpriseService>().synchronize(access)
             val selection = sessions.observeSelectedRealmSelection().first { it?.access == access }!!
             val commands = koin.get<net.weero.measix.pilot.service.ConfigurationApplicationService>()
@@ -184,6 +187,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            CoreConsumerTarget.requireTarget(sessions, access)
             check(access.scope.authority.deploymentId.isNotBlank())
             koin.get<net.weero.measix.pilot.service.PlatformEnterpriseService>().synchronize(access)
             val models = koin.get<ModelExecutionService>()
@@ -217,6 +221,7 @@ class PlatformModelLiveAndroidTest {
             koin.get<ApplicationRecoveryGate>().awaitReady()
             val sessions = koin.get<EnterpriseSessionController>()
             val access = sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
+            CoreConsumerTarget.requireTarget(sessions, access)
             check(access.scope.authority.deploymentId.isNotBlank())
             val models = koin.get<ModelExecutionService>()
             val configuration = models.read(access).configuration

@@ -173,6 +173,71 @@ instrumentation，不用会卸载应用的 connected 任务。测试通过原远
 设备验证 4 GiB HEAD、跨 2 GiB 与末尾 Range 及真实解码，finally 删除本次目录与握手文件，将结果写入
 `remote-preview-live-evidence.json`。截图位于应用 external files。测试仍不代表完整 4 GiB 网络传输或高码率持续播放。
 
+### APK 发行记录与 Core 消费证据
+
+`release.yml` 在构建前核对 tag 与 Gradle 产品版本，检查已有 tag/release/assets，生成并检查 wire 无 drift。
+构建后的 `writeAndroidReleaseBuildInfo` 固定 Android 自有支持集合；
+`tools/produce_android_release.py` 要求干净源码，使用 SDK `apkanalyzer manifest` 读取每个最终 APK 的
+applicationId/versionName/versionCode，使用 `apksigner verify --print-certs` 验证签名，计算实际 APK SHA-256
+和原生 ABI 集合。版本/tag 不符、无签名、重复 ABI、dirty source 或已占用输出均拒绝；失败输出保留。
+Snapshot 支持集合读取原 `PlatformSnapshotCompatibility.supportedSchemas`，不从主合同推算。
+
+`generateAndroidBuildIdentity` 将构建时的 Git commit、dirty 标志及同一产品/合同信息写入
+APK 的 `assets/android-build-identity.json`；Gradle 将这些值作为生成任务输入。producer 比较已验签 APK
+中的原始身份与当前干净 source/build-info，原生 identity 再读取已安装 APK 的同一资产。
+仅提交新代码而沿用旧 APK、缺少构建身份或 dirty 构建均拒绝，不把调用 producer 时的 HEAD 当作 APK 来源。
+
+随包目录包含 `android-release.json`、`apks/`、原 `contracts/`（含两份 manifest、baseline、全部 Portal 材料及
+`PlatformWire.kt`）和签名核验日志；记录路径相对该目录，不允许逃逸。GitHub 同时交付完整
+`android-release-bundle.zip`，应解压后将整个目录保全，不能只下载 JSON。候选/正式状态与是否完成 Core
+兼容验证分别判断；正式记录要求 release 变体、有效签名与 `v<versionName>`，不从记录存在推断兼容。
+网站同步的版本读取该最终 APK 记录。无发布要求时不升版本或修改 changelog。
+
+```powershell
+python -m pip install PyYAML==6.0.2
+python -m unittest discover -s tools -p test_android_release.py -v
+python tools/generate-enterprise-wire.py --check
+.\gradlew.bat assembleRelease :app:writeAndroidReleaseBuildInfo --no-parallel --max-workers=1
+python tools/produce_android_release.py --status candidate --variant release --apk <最终签名APK> --output build/<独占包目录>
+```
+
+对正式或 Debug 固定包，原生 `AndroidReleaseIdentityAndroidTest` 读取已安装应用的 PackageManager 版本、
+签名及 sourceDir 的实际 APK 摘要，并经目标 ClassLoader 反射读取 BuildConfig，避免测试 APK 的常量内联
+冒充目标身份。Release keep rules 保留这些字段。测试 APK 必须按固定源码、同一证书及目标变体独立构建；
+使用 `-PandroidConsumerVariant=release` 可构建 Release instrumentation，普通任务保持 Debug。
+
+`tools/run_android_core_consumer.py` 要求干净且与原记录相同的 Android commit、原 APK/材料，读取实际已部署
+Core 包的 `release.json` 并重新计算 bin/assets/deploy 的 buildHash。它保留数据安装原 APK，在消费者前后核验
+原生 identity；snapshot/runtime/portal 三类均执行显式 plan 指定的本仓库 `*LiveAndroidTest`。
+`AndroidConsumerJUnitListener` 从真实 native JUnit 事件生成 XML，runner 保留每次命令、原始日志及四类聚合
+JUnit。失败、跳过、零测试、计数不全、损坏文件及 source/payload 改变均不生成 `evidence.json`；成功才写入
+Core 发布文档规定的 source/build/APK/record/report/log 摘要链。输出目录不能复用，失败日志不可改写。
+
+plan 是本次实际部署的场景安排，三项 `snapshot/runtime/portal` 各为非空步骤数组，每步为
+`{"class":"<完整LiveAndroidTest类名，可带#方法名>","arguments":{"<参数名>":"<非敏感标量或私有输入路径>"}}`。
+Snapshot 使用 `PlatformSnapshotCompatibilityLiveAndroidTest#verifiesRequestedLiveScenario`，另填 `scenario`，
+须完整包含 `join-v4/reopen-v4/sync-v5/reopen-v5/reject-v3/reject-v6/reject-v7/recover-v5`；
+原生读取输入后复验 scenario 与实际版本。Runtime 固定六个真实 generation/model/MCP/ASR/TTS consumer 方法，
+并要求 `RemoteWorkspaceLiveAndroidTest#realFileRoundTripConditionsLifecycleAndNativePage` 的真实文件场景，
+不接受仅本地选择断言的 live 方法。Portal 固定 `PortalCoreConsumerLiveAndroidTest`，通过生产
+`EnterpriseApplicationService.openPortal` 打开包内实际 WebView 页面并比较部署包 JS/CSS 摘要，
+核验 Bridge 已知响应与错误、真实 native 权限拒绝、取消、切域关闭、退出取消和确认退出。
+它会退出专属企业测试身份。runner 参数采用白名单，拒绝 logOnly、过滤、分片和替换 listener 等控制项。
+凭据放设备私有 cache 输入文件，不放命令或 plan。主机须在各场景间按原 Core owner 操作隔离发布/权限，
+输入材料与候选包由同一次部署取得；runner 不部署 Core、不创建发布、不替代场景完整性审查。
+设备 Session 的 origin/deploymentId 必须与同一次真实部署的输入一致，不能复用其他已接入环境。
+现有 Snapshot 探针、Runtime live 测试见本节上文；PortalCapture 的本地 native 测试和 JVM mock 不能用作
+包内真实 Portal 消费证据。响应扩展、已知引用拒绝/字节保全、工作区及资源权限等仍须在该部署的采用范围
+安排真实场景；必验矩阵存在或本地协议回归通过不代替这些实际结果。实际候选缺失时，组合保持未验证。
+
+```powershell
+python tools/run_android_core_consumer.py --android-release <原记录> --apk-sha256 <本次固定APK摘要> --core-release <实际部署包/release.json> --core-origin <同次部署origin> --deployment-id <同次部署ID> --plan <本次live场景JSON> --serial <专用设备> --output build/<独占证据目录>
+```
+
+最后由 Core 的 `verify-preview-contract.mjs` 联合核验并由 builder 重建比对同一 buildHash；
+Android 本地工具测试、普通 connected 门禁或合同号相同不证明该组合兼容。源 Core checkout 有未提交材料时，
+先由其 owner 固定来源，不能将旧 HEAD 写成这些新材料的固定 sourceCommit。
+
 ## 6. 性能证据
 
 性能入口为 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测冷启动，

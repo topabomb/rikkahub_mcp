@@ -66,6 +66,7 @@ class RemoteWorkspaceLiveAndroidTest {
                     val platform = koin.get<PlatformEnterpriseService>()
                     val access = platform.enroll(EnrollmentMaterialParser().parse(input.getString("enrollment")),
                         android.os.Build.MODEL, net.weero.measix.pilot.BuildConfig.VERSION_NAME)
+                    CoreConsumerTarget.requireTarget(sessions, access)
                     val available = sessions.state.value as EnterpriseState.Available
                     val configurationPublished = input.optBoolean("configurationPublished", false)
                     if (!configurationPublished) {

@@ -138,7 +138,11 @@ fun SettingAboutPage() {
                             ),
                             leadingContent = { Icon(HugeIcons.Code, null) },
                             supportingContent = {
-                                Text("${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}")
+                                Column {
+                                    Text("${BuildConfig.VERSION_NAME} / ${BuildConfig.VERSION_CODE}")
+                                    Text(stringResource(R.string.about_page_platform_contract, BuildConfig.PLATFORM_CONTRACT_VERSION))
+                                    Text(stringResource(R.string.about_page_core_baseline, BuildConfig.CORE_BASELINE_VERSION))
+                                }
                             },
                             headlineContent = { Text(stringResource(R.string.about_page_version)) },
                         )

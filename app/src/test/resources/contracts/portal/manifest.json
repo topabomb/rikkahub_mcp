@@ -1,4 +1,10 @@
 {
+  "platformContractVersion": 2,
+  "supportedPlatformContractVersions": [
+    2
+  ],
+  "coreBaselineVersion": "0.2.0-preview.23",
+  "baselineHash": "sha256:097e1406ef789ba8c0b05a1204edd94167a87b230855a5c2c443d077f95f0725",
   "bridgeVersion": 3,
   "artifacts": {
     "portal-contract.openapi.json": {
