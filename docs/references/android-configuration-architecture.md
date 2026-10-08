@@ -124,6 +124,8 @@ v4 与 v5 的 MCP/助手 DTO 独立生成。`PlatformWireCodec` 先验证 v4 的
 把去重后的 `mcpServerIds` 投影为 ALL bindings；保留原 schemaVersion，不将非法 v5 降级。
 v5 必须提供服务 `toolAccessMode/allowedTools` 与助手 `mcpBindings`，模式的空/非空关系和服务器授权上限由
 `EnterpriseConfigurationCodec.validateConfiguration` 校验。具体工具交集及执行复验见 [MCP 架构](mcp-architecture.md)。
+`EnterpriseAppliedStore` 从现有执行描述读取 `snapshotSchemaVersion`，随 `LoadedEnterpriseState` 发布到
+`EnterpriseState.Available`，供 resolver、查询和执行统一区分 v5 强制集合与 v4 绑定上限；该派生值不另存一份。
 
 `EnterpriseAppliedStore` 将 manifest 6 的旧 MCP 配置转换为同等 ALL 规则，在校验原 hash 后写新不可变 revision，
 最后原子发布 manifest 7；旧文件不改写，原 Session、凭据、release/hash、格式版本和空间选择保留。

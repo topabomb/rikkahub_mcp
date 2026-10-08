@@ -89,7 +89,12 @@ internal data class ResolvedConfiguration(
     val storedSelections: ResourceSelections,
     val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
     val assistantModelPreferences: Map<ConfigurationReference, AssistantModelPreference>,
+    val enterpriseSnapshotSchemaVersion: Long? = null,
 ) {
+    /** The v5 binding meaning must not loosen the published v4 or an unidentified snapshot. */
+    fun permitsAdditionalManagedMcp(assistantId: ConfigurationReference): Boolean =
+        assistantId is ConfigurationReference.User || enterpriseSnapshotSchemaVersion == 5L
+
     fun availableStarters(assistantId: ConfigurationReference? = null): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
         val identity = enterpriseIdentity ?: return emptyList()
         return enterpriseConfiguration?.starters.orEmpty().filter { starter ->
@@ -293,7 +298,8 @@ internal object ConfigurationResolver {
             enterprise.assistants.forEach { definition ->
                 val id = identity.reference(definition.id)
                 add(ConfigurationCategory.ASSISTANT, id, definition.name, definition.enabled)
-                assistants[id] = resolveEnterpriseAssistantUsage(identity, definition, document.preferences.assistantUsage(scope, id))
+                assistants[id] = resolveEnterpriseAssistantUsage(identity, definition, document.preferences.assistantUsage(scope, id),
+                    allowAdditionalManagedMcp = available.snapshotSchemaVersion == 5L)
             }
         }
         val selected = document.preferences.forScope(scope)
@@ -352,6 +358,6 @@ internal object ConfigurationResolver {
             }
         }
         return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected,
-            inheritedSubAssistants, assistantModelPreferences)
+            inheritedSubAssistants, assistantModelPreferences, available?.snapshotSchemaVersion.takeIf { enterprise != null })
     }
 }

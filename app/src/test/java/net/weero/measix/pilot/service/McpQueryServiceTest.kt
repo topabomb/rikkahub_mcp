@@ -170,6 +170,25 @@ class McpQueryServiceTest {
         assertFalse(present(failure, retry).sessionCallable)
     }
 
+    @Test fun `v5 picker shows unbound enterprise services and permits explicit selection`() {
+        val packet = exampleEnterprisePackage()
+        val definition = packet.configuration.assistants.first().copy(mcpBindings = emptyList())
+        val unbound = packet.copy(configuration = packet.configuration.copy(assistants = listOf(definition)))
+        val resolved = ConfigurationResolver.resolve(UserSettingsDocument.empty(), packet.identity.scope, appliedConfiguration(unbound))
+        val access = RealmAccess.Enterprise(packet.identity.scope, "query")
+        val target = ConversationAssistantTarget(ConversationCommandTarget(kotlin.uuid.Uuid.random(), RealmSelection(access, 1)) {},
+            packet.identity.reference(definition.id))
+        val choices = resolved.conversationConfiguration(target).mcpChoices(emptyList())
+        packet.configuration.mcpServers.filter { it.enabled }.forEach { server ->
+            val choice = choices.single { it.serverId == packet.identity.reference(server.id) }
+            assertFalse(choice.selected)
+            assertTrue(choice.canToggle)
+            assertFalse(choice.fixedByDefinition)
+        }
+        val legacy = ConfigurationResolver.resolve(UserSettingsDocument.empty(), packet.identity.scope, appliedConfiguration(unbound, 4L))
+        assertTrue(legacy.conversationConfiguration(target).mcpChoices(emptyList()).none { it.serverId is ConfigurationReference.Enterprise })
+    }
+
     @Test
     fun `catalog identity mismatch is an error rather than fabricated discovery`() {
         val server = McpServerConfig.StreamableHTTPServer(

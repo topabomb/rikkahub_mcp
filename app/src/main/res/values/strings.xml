@@ -2126,7 +2126,7 @@
   <string name="mcp_tool_missing">Not provided by server; contact administrator</string>
   <string name="mcp_tool_contract_changed">Definition changed; ask administrator to republish</string>
   <string name="mcp_tool_directory_unavailable">Connects on first use</string>
-  <string name="mcp_assistant_fixed_binding">Fixed by assistant</string>
+  <string name="mcp_assistant_fixed_binding">Required by enterprise</string>
   <string name="mcp_tools_partially_available">%1$d available · %2$d need administrator attention</string>
   <string name="mcp_tools_count">%1$d tools</string>
   <string name="modal_drag_handle">Drag handle</string>

@@ -33,6 +33,7 @@ internal sealed interface EnterpriseState {
         val configuration: EnterpriseConfiguration?,
         val modelCapabilities: Map<String, me.rerere.ai.provider.ChatTransportCapabilities> = emptyMap(),
         val configurationError: Exception? = null,
+        val snapshotSchemaVersion: Long? = null,
     ) : EnterpriseState
     data class Failed(val reason: String) : EnterpriseState
 }

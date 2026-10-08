@@ -61,8 +61,17 @@ Session 锁可阻止退出状态并发写入，但不能阻止墙上时钟越过
 
 平台连接使用 `McpConnectionDefinition.ManagedPlatform`。平台连接消费同一顶层模型捕获的 AppliedVersion 与 interactionId，以原 Session 签发执行 lease；完整 URL 来自 Platform execution，不构造 Local binding。`McpProtocolClientFactory` 仍唯一创建 SDK transport/client，平台 Bearer 由原 lease 的请求回调在每个 POST/GET 之前取得，刷新 I/O 不进入配置/Runtime 锁。平台 catalog digest 只含身份、公开 route、release/hash、generation 和 authOwnership，token 轮换不改变目录或连接身份。只读目录检查使用 `readExecution`，不要求网络或额外执行 lease。
 
-Direct MCP 只装配已解析助手选中的服务。企业助手仅使用发布的 `mcpBindings`；固定引用不可删，
-使用偏好不能增加未绑定的受管服务或恢复已移除的绑定。准入允许时仍可添加用户 MCP；用户助手可选择本域受管服务。
+Direct MCP 只装配已解析助手选中的服务。Snapshot v5 的企业助手 `mcpBindings` 是企业强制启用集合，
+固定引用不可删，其工具范围不能由用户扩大；用户可主动追加本域已下发且启用的企业 MCP，默认不选。
+`allowLocalMcp` 和 `allowLocalAssistants` 不限制此类企业服务选择，仍分别约束用户自有 MCP 和助手。
+实际装配集合为强制引用与用户选择的并集，逐次执行仍复验助手、服务、Session 和工具授权；同一服务只装配一次，
+有 binding 时优先使用其工具范围，无 binding 时使用服务器授权上限。主助手和子助手各自按目标助手解析。
+
+主动追加沿 `AssistantPreferenceChange` 保存到原 Deployment/User/Assistant 的 `AssistantUsagePreferences.mcpServers`，
+不写入企业 Snapshot。显示或点击强制项不产生用户偏好；企业后来添加 binding 保留原主动选择，移除 binding 后
+纯强制项不再选中，原主动选择仍保留。过期编辑器仅合并真实字段差量；`ResetUsage` 清除额外选择，保留当前强制项。
+被禁用、删除或撤权的主动引用保留原因和取消选择入口，不能执行。v4 及未记录格式版本继续限制企业助手的受管服务
+为绑定集合；准入允许时仍可添加用户 MCP，用户助手可选择本域受管服务。
 
 服务 ALL 使用动态发现目录，不增加逐次确认，也不锁定企业发布哈希。服务 ALLOWLIST 使用准确工具名和完整 Tool 的
 JCS UTF-8 SHA-256 `contractHash`，包括 description、outputSchema、annotations、`_meta` 和扩展字段。

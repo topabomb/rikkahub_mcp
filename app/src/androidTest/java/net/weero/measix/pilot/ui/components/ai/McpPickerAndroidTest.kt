@@ -38,6 +38,25 @@ class McpPickerAndroidTest {
         fixedByDefinition = true, allowsAllTools = true, selectsAllTools = true, directoryConfirmed = true,
     )
 
+    @Test fun mandatoryAndOptionalServicesKeepIndependentSwitchesAndCommands() {
+        val optionalId = serverId.copy(id = "mcp_optional")
+        val optional = choice().copy(serverId = optionalId, name = "Optional enterprise tools", selected = false,
+            canToggle = true, fixedByDefinition = false, selectsAllTools = null)
+        val choices = mutableStateOf(listOf(choice(), optional))
+        val commands = mutableListOf<Pair<ConfigurationReference, Boolean>>()
+        compose.setContent { MaterialTheme { McpPicker(choices.value, onToggle = { id, enabled ->
+            commands += id to enabled
+            choices.value = choices.value.map { if (it.serverId == id) it.copy(selected = enabled) else it }
+        }) } }
+        compose.onNodeWithContentDescription("Enterprise tools").assertIsOn().assertIsNotEnabled()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_assistant_fixed_binding), substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription(optional.name).assertIsOff().assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription(optional.name).assertIsOn().performClick()
+        compose.onNodeWithContentDescription(optional.name).assertIsOff()
+        compose.onNodeWithContentDescription("Enterprise tools").assertIsOn().assertIsNotEnabled()
+        assertEquals(listOf(optionalId to true, optionalId to false), commands)
+    }
+
     @Test fun firstUseAndConfirmedEmptyRemainDistinctWithoutMisleadingCounts() {
         val state = mutableStateOf(choice().copy(status = McpStatus.Idle, sessionCallable = false,
             tools = listOf(missing.copy(unavailableReason = McpToolUnavailableReason.DIRECTORY_UNAVAILABLE)), directoryConfirmed = false))

@@ -14,12 +14,13 @@ import org.junit.Assert.*
 import org.junit.Test
 import kotlin.uuid.Uuid
 
-internal fun appliedConfiguration(packet: EnterprisePackage): EnterpriseState.Available = EnterpriseState.Available(
+internal fun appliedConfiguration(packet: EnterprisePackage, snapshotSchemaVersion: Long? = 5L): EnterpriseState.Available = EnterpriseState.Available(
     EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
         EnterpriseSession("ses_${Uuid.random()}", packet.identity, Long.MAX_VALUE),
         EnterpriseAppliedVersion(Uuid.random().toString(), packet.configuration.generation, "0".repeat(64), "0".repeat(64)),
         packet.identity.scope, packet.identity),
     packet.configuration,
+    snapshotSchemaVersion = snapshotSchemaVersion,
 )
 
 class ConfigurationResolverTest {

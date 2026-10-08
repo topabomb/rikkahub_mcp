@@ -58,6 +58,7 @@ internal data class ConversationConfigurationUiModel(
     val isDraft: Boolean = false,
     /** Null names mean the inherited binding selects the full server-authorized directory. */
     val fixedMcpToolSelections: Map<ConfigurationReference, Set<String>?> = emptyMap(),
+    val permitsAdditionalManagedMcp: Boolean = target.assistantId is ConfigurationReference.User,
 ) {
     val canChangeModel: Boolean get() = assistant != null
     val canEditDefinition: Boolean get() = target.assistantId is ConfigurationReference.User
@@ -103,5 +104,6 @@ internal fun ResolvedConfiguration.conversationConfiguration(
                     }
             }
         }.orEmpty(),
+        permitsAdditionalManagedMcp = permitsAdditionalManagedMcp(target.assistantId),
     )
 }

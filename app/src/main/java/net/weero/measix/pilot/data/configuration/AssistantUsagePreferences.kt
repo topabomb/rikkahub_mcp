@@ -89,6 +89,7 @@ internal fun resolveEnterpriseAssistantUsage(
     identity: EnterpriseIdentity,
     definition: EnterpriseAssistant,
     usage: AssistantUsagePreferences?,
+    allowAdditionalManagedMcp: Boolean = false,
 ): Assistant {
     val fixed = Assistant(
         id = identity.reference(definition.id),
@@ -102,7 +103,9 @@ internal fun resolveEnterpriseAssistantUsage(
     )
     return applyAssistantUsage(fixed, usage).let { resolved ->
         resolved.copy(
-            mcpServers = fixed.mcpServers + resolved.mcpServers.filterIsInstance<ConfigurationReference.User>(),
+            mcpServers = fixed.mcpServers + resolved.mcpServers.filter {
+                allowAdditionalManagedMcp || it is ConfigurationReference.User
+            },
             allowConversationSystemPrompt = false,
         )
     }

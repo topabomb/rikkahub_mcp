@@ -35,7 +35,7 @@ internal fun ConversationConfigurationUiModel.mcpChoices(runtime: List<McpServer
     val selected = assistant?.mcpServers.orEmpty()
     val definitions = resources.filter { it.key.category == ConfigurationCategory.MCP }.associateBy { it.key.reference }
     return (definitions.keys + selected).filter { id ->
-        target.assistantId !is ConfigurationReference.Enterprise || id !is ConfigurationReference.Enterprise || id in fixedMcpBindings
+        permitsAdditionalManagedMcp || id !is ConfigurationReference.Enterprise || id in fixedMcpBindings
     }.map { id ->
         val definition = definitions[id]
         val reason = definition?.access?.unavailableReason

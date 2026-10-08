@@ -15,6 +15,25 @@ import org.robolectric.annotation.Config
 class EnterpriseConfigurationRecoveryTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `MCP binding meaning follows the persisted snapshot format after restart`() = runTest {
+        for (schema in listOf(4L, 5L)) {
+            val root = temporary.newFolder()
+            val store = enterpriseTestStore(root)
+            val packet = exampleEnterprisePackage()
+            val original = EnterpriseSessionController(store).enrollFixture(packet)
+            val candidate = packet.toCandidate().let {
+                it.copy(execution = (it.execution as EnterpriseExecution.Platform).copy(snapshotSchemaVersion = schema))
+            }
+            val manifest = original.manifest.copy(applied = store.prepare(candidate))
+            assertEquals(schema, store.commit(manifest).toAvailable().snapshotSchemaVersion)
+            val recovered = EnterpriseSessionController(enterpriseTestStore(root)).recover() as EnterpriseState.Available
+            assertEquals(schema, recovered.snapshotSchemaVersion)
+            val resolved = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+                net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope, recovered)
+            assertEquals(schema == 5L, resolved.permitsAdditionalManagedMcp(packet.identity.reference(packet.configuration.assistants.first().id)))
+        }
+    }
+
     @Test
     fun `retired local identity cannot acquire a platform session and personal recovery remains available`() = runTest {
         val root = temporary.newFolder()

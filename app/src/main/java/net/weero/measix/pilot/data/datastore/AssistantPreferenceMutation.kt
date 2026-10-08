@@ -29,7 +29,7 @@ internal fun UserSettingsDocument.changeAssistantPreference(
             ?.mapTo(linkedSetOf()) { ConfigurationReference.Enterprise(reference.authority, it) }
     }.orEmpty()
     fun requireMcpBinding(reference: ConfigurationReference) {
-        require(assistantId !is ConfigurationReference.Enterprise ||
+        require(resolved.permitsAdditionalManagedMcp(assistantId) ||
             reference !is ConfigurationReference.Enterprise || reference in fixedMcp) {
             "enterprise_assistant_mcp_binding_missing"
         }

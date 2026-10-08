@@ -1,4 +1,10 @@
 {
+  "platformContractVersion": 2,
+  "supportedPlatformContractVersions": [
+    2
+  ],
+  "coreBaselineVersion": "0.2.0-preview.23",
+  "baselineHash": "sha256:389b429ae51eb8d8cfbbf927c028ad298b0e1471edb668b86e28cb778224804b",
   "bridgeVersion": 3,
   "artifacts": {
     "portal-contract.openapi.json": {
@@ -7,7 +13,7 @@
     },
     "client-feed.schemas.json": {
       "source": "api/portal/client-feed.schemas.json",
-      "sha256": "d47d7df777d36078fb37138b559c1c4d2565fb1cec978c9b19eaa9ba1d6b414e"
+      "sha256": "4221516537948d2744d82a0d5172cfbd3e4c4a0f939c60d94d8d654b5c8c8681"
     },
     "native-vectors.json": {
       "source": "api/fixtures/portal/native-vectors.json",

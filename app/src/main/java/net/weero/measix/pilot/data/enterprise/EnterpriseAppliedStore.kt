@@ -98,12 +98,14 @@ internal data class LoadedEnterpriseState(
     val configuration: EnterpriseConfiguration?,
     val modelCapabilities: Map<String, ChatTransportCapabilities> = emptyMap(),
     val configurationError: Exception? = null,
+    val snapshotSchemaVersion: Long? = null,
 ) {
-    fun toAvailable() = EnterpriseState.Available(manifest, configuration, modelCapabilities, configurationError)
+    fun toAvailable() = EnterpriseState.Available(manifest, configuration, modelCapabilities, configurationError, snapshotSchemaVersion)
 }
 
 private fun EnterpriseCandidate?.loaded(manifest: EnterpriseManifest) = LoadedEnterpriseState(
     manifest, this?.configuration, this?.modelCapabilities().orEmpty(),
+    snapshotSchemaVersion = (this?.execution as? EnterpriseExecution.Platform)?.snapshotSchemaVersion,
 )
 
 internal enum class EnterpriseStorageCheckpoint {

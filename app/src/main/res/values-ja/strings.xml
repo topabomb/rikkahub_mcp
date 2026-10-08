@@ -2118,7 +2118,7 @@
   <string name="mcp_tool_missing">サーバーにツールがありません。管理者に連絡してください</string>
   <string name="mcp_tool_contract_changed">定義が変更されました。管理者による再公開が必要です</string>
   <string name="mcp_tool_directory_unavailable">初回利用時に接続</string>
-  <string name="mcp_assistant_fixed_binding">アシスタント固定</string>
+  <string name="mcp_assistant_fixed_binding">企業による必須設定</string>
   <string name="mcp_tools_partially_available">%1$d 個が利用可能 · %2$d 個は管理者の対応が必要</string>
   <string name="mcp_tools_count">%1$d 個のツール</string>
   <string name="modal_drag_handle">ドラッグハンドル</string>

@@ -2118,7 +2118,7 @@
   <string name="mcp_tool_missing">服务器无此工具，请联系管理员</string>
   <string name="mcp_tool_contract_changed">定义已变更，需管理员重新发布</string>
   <string name="mcp_tool_directory_unavailable">首次使用时连接</string>
-  <string name="mcp_assistant_fixed_binding">助手固定</string>
+  <string name="mcp_assistant_fixed_binding">企业强制启用</string>
   <string name="mcp_tools_partially_available">%1$d 个可用 · %2$d 个需管理员处理</string>
   <string name="mcp_tools_count">%1$d 个工具</string>
   <string name="modal_drag_handle">拖动手柄</string>

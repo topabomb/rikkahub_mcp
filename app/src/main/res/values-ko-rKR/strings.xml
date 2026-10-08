@@ -2118,7 +2118,7 @@
   <string name="mcp_tool_missing">서버에 없는 도구. 관리자에게 문의하세요</string>
   <string name="mcp_tool_contract_changed">정의가 변경됨. 관리자 재게시 필요</string>
   <string name="mcp_tool_directory_unavailable">처음 사용할 때 연결</string>
-  <string name="mcp_assistant_fixed_binding">어시스턴트 고정</string>
+  <string name="mcp_assistant_fixed_binding">기업에서 필수 활성화</string>
   <string name="mcp_tools_partially_available">%1$d개 사용 가능 · %2$d개 관리자 조치 필요</string>
   <string name="mcp_tools_count">도구 %1$d개</string>
   <string name="modal_drag_handle">드래그 핸들</string>

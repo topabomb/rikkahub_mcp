@@ -191,6 +191,8 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 `AssistantUsageEditor` 使用原 `ConversationAssistantTarget` 与 `ConversationViewLease` 编辑当前会话助手。未选候选只展示目录快照，不构造写目标；企业助手不进入个人 Settings 编辑器。详情与普通助手配置共用分组和内容组件，用户助手可明确进入原共享定义编辑器，并说明跨空间影响。
 
 名称、描述、System Prompt、子助手身份和企业固定 MCP 只读。继承的子助手引用不可移除；本域额外引用按目录准入选择。`ResetUsage` 只在企业域出现，只删除原主体对该助手的使用覆盖。
+Snapshot v5 的固定 MCP 表示企业强制启用，企业助手可通过原使用偏好主动追加已下发且启用的企业 MCP；
+固定工具范围、v4 兼容、配置变化及执行复验规则见 [MCP 架构](mcp-architecture.md)。
 
 模型使用 `AssistantModelPreferenceMode` 区分“继承助手定义”“跟随本域默认”“指定模型”，不从最终解析出的引用反推。显式失效引用保留原值和原因。聊天输入区与详情共用 `ModelListSheet`；显式 null 在直接聊天中继承本域默认，在子助手中按共用协议借用 Caller 模型及参数。模型随 Turn 捕获，后续修改不改写在途 Turn，执行仍复验原模型资源与 Session。
 

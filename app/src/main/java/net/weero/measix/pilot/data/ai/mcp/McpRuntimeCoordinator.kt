@@ -542,7 +542,8 @@ class McpRuntimeCoordinator internal constructor(
                                         it.id == (captured.assistant.id as? ConfigurationReference.Enterprise)?.id
                                     }
                                     val binding = managedAssistant?.mcpBindings?.find { it.mcpServerId == definition.id.id }
-                                    if (resource == null || (managedAssistant != null && binding == null)) null
+                                    if (resource == null || (managedAssistant != null && binding == null &&
+                                            !configuration.permitsAdditionalManagedMcp(captured.assistant.id))) null
                                     else definition.withToolAccess(resource, binding)
                                 }
                                 else -> latest.userSettings.mcpServers.find { it.id == definition.id }
