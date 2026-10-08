@@ -86,7 +86,11 @@ ALLOWLIST 仅按发布的 AUTO/REQUIRE_CONFIRMATION 决定审批，不从远端 
 其他显式引用不可执行时准备失败。Gateway 独立装配完整工具对，REQUIRED 目录未就绪时拒绝准备。
 Gateway 使用开关只影响新 interaction；在途执行仍复验原 Session、助手和资源是否存在。
 当前 Core Snapshot 映射只提供普通受管 MCP，`PlatformSnapshotMapper` 的 Gateway 目录为空；下述 Gateway 校验描述已有类型与执行约束，不代表当前平台接入已提供独立 Gateway 资源。
-受管 namespace 由稳定资源引用摘要派生，避免本地化名称或长资源 ID 破坏 Provider 工具名。
+受管 `managedMcpNamespace` 对包含 Deployment 与资源 ID 的稳定引用计算 SHA-256，取前 64 bit，按字符集
+`0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ` 无损编码为固定 11 位 Base62，前置独立的企业标记 `e`。
+Provider 名仍为 `mcp__<namespace>__<原始工具名>`，摘要不使用 `_`；完整名称按原装配入口验证长度和重名，
+执行闭包继续绑定真实资源与原始工具名。命名在 START 冻结，CONTINUE 沿用原索引，历史消息不回写名称；
+显示名称、本地化和发布版本不参与 namespace，64 bit 摘要的碰撞空间不因换编码缩小。
 
 受管 Streamable HTTP 使用禁止重定向、关闭透明请求重试并带 `PrivateRequest` 的专用共享 client。
 原 generation 与 interaction headers 来自捕获的 binding owner，私有包不能覆盖这些协议头。
@@ -338,6 +342,11 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 
 首次无目录的连接/发现/授权才显示 loading，后台恢复显示状态与下次重试。
 个人空目录是拒绝；受管 Direct MCP 的成功空目录表示当前无工具。
+`McpPicker` 名称行仅保留 20dp 连接状态图标、名称及开关；下方摘要与名称起点对齐。
+企业服务在摘要行前显示 14dp 单色楼宇图标，个人项不标记；来源按资源引用判断，与强制绑定及连接状态独立。
+摘要平时显示工具数，连接或异常时显示对应状态，必要时另列目录计数与绑定说明。
+Idle 不显示“使用时连接”或“已保存目录”正文，已确认目录只保留一行工具计数，
+无目录不推测数量。连接、授权、等待网络、失败与撤权原因仍显示，完整诊断保留原展开入口。
 服务器与助手范围、确认规则和有效计数由同一投影给出；工具缺失或契约变化保留原因，
 契约变化提示管理员重新发布，不与“调用前确认”混用。详情与原诊断按需展开。
 

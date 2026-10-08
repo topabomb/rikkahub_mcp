@@ -84,7 +84,18 @@ data class McpRuntimeKey(
 
 internal enum class McpDefinitionUse { EXECUTION, CATALOG_PUBLICATION }
 
-internal fun managedMcpNamespace(id: ConfigurationReference.Enterprise): String = "enterprise_" + sha256(id.toString()).take(16)
+private const val MCP_NAMESPACE_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+internal fun managedMcpNamespace(id: ConfigurationReference.Enterprise): String {
+    // Re-encode the same unsigned 64 digest bits; the source marker is outside the fixed-width payload.
+    var digest = sha256(id.toString()).take(16).toULong(radix = 16)
+    val encoded = CharArray(11)
+    for (index in encoded.indices.reversed()) {
+        encoded[index] = MCP_NAMESPACE_ALPHABET[(digest % 62uL).toInt()]
+        digest /= 62uL
+    }
+    return "e${encoded.concatToString()}"
+}
 
 /** Public route and release facts define catalog identity; access-token rotation never invalidates schemas. */
 internal fun platformMcpDefinitionDigest(

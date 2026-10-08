@@ -2,11 +2,18 @@ package net.weero.measix.pilot.ui.components.ai
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
 import kotlinx.serialization.json.JsonObject
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.common.configuration.EnterpriseAuthority
@@ -48,12 +55,12 @@ class McpPickerAndroidTest {
             commands += id to enabled
             choices.value = choices.value.map { if (it.serverId == id) it.copy(selected = enabled) else it }
         }) } }
-        compose.onNodeWithContentDescription("Enterprise tools").assertIsOn().assertIsNotEnabled()
+        compose.onNode(hasContentDescription("Enterprise tools") and isToggleable()).assertIsOn().assertIsNotEnabled()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_assistant_fixed_binding), substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription(optional.name).assertIsOff().assertIsEnabled().performClick()
-        compose.onNodeWithContentDescription(optional.name).assertIsOn().performClick()
-        compose.onNodeWithContentDescription(optional.name).assertIsOff()
-        compose.onNodeWithContentDescription("Enterprise tools").assertIsOn().assertIsNotEnabled()
+        compose.onNode(hasContentDescription(optional.name) and isToggleable()).assertIsOff().assertIsEnabled().performClick()
+        compose.onNode(hasContentDescription(optional.name) and isToggleable()).assertIsOn().performClick()
+        compose.onNode(hasContentDescription(optional.name) and isToggleable()).assertIsOff()
+        compose.onNode(hasContentDescription("Enterprise tools") and isToggleable()).assertIsOn().assertIsNotEnabled()
         assertEquals(listOf(optionalId to true, optionalId to false), commands)
     }
 
@@ -61,7 +68,8 @@ class McpPickerAndroidTest {
         val state = mutableStateOf(choice().copy(status = McpStatus.Idle, sessionCallable = false,
             tools = listOf(missing.copy(unavailableReason = McpToolUnavailableReason.DIRECTORY_UNAVAILABLE)), directoryConfirmed = false))
         compose.setContent { MaterialTheme { McpPicker(listOf(state.value), onToggle = { _, _ -> error("fixed binding") }) } }
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_on_demand)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_on_demand)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_status_on_demand)).assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 0, 1)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_tools_partially_available, 0, 1)).assertDoesNotExist()
         compose.runOnIdle { state.value = choice(emptyList()) }
@@ -105,7 +113,63 @@ class McpPickerAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_ready, 1)).assertDoesNotExist()
         compose.runOnIdle { state.value = state.value.copy(status = McpStatus.Idle, sessionCallable = false, connectionsPartiallyReady = false) }
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_catalog_saved, 1)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_catalog_saved, 1)).assertDoesNotExist()
+        compose.onAllNodesWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertCountEquals(1)
+    }
+
+    @Test fun enterpriseMarkerIsIndependentOfMandatoryBindingAndIdleCountsAreShownOnce() {
+        val mandatory = choice().copy(name = "Firecrawl 网页读取", status = McpStatus.Idle, sessionCallable = false)
+        val optional = mandatory.copy(serverId = serverId.copy(id = "mcp_optional"), name = "远程工作区文件与执行工具",
+            selected = false, canToggle = true, fixedByDefinition = false, selectsAllTools = null)
+        val personal = optional.copy(serverId = ConfigurationReference.random(), name = "个人网页搜索")
+        val commands = mutableListOf<Pair<ConfigurationReference, Boolean>>()
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                MaterialTheme(colorScheme = darkColorScheme()) {
+                    McpPicker(listOf(mandatory, optional, personal), onToggle = { id, selected -> commands += id to selected })
+                }
+            }
+        }
+        val source = compose.activity.getString(R.string.mcp_enterprise_definitions)
+        val markers = compose.onAllNodes(hasContentDescription(source) and !isToggleable())
+        markers.assertCountEquals(2)
+        compose.onAllNodesWithText(source).assertCountEquals(listOf(mandatory, optional, personal).count { it.name == source })
+        compose.onAllNodesWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1)).assertCountEquals(3)
+        compose.onAllNodesWithText(compose.activity.getString(R.string.mcp_catalog_saved, 1)).assertCountEquals(0)
+        compose.onAllNodesWithText(compose.activity.getString(R.string.mcp_status_on_demand)).assertCountEquals(0)
+        val counts = compose.onAllNodesWithText(compose.activity.getString(R.string.mcp_enabled_tools_count, 1, 1))
+            .fetchSemanticsNodes()
+        listOf(mandatory, optional).forEachIndexed { index, server ->
+            val markerBounds = markers[index].fetchSemanticsNode().boundsInRoot
+            val nameBounds = compose.onNodeWithText(server.name).fetchSemanticsNode().boundsInRoot
+            assertTrue("Source marker belongs below the name", markerBounds.top >= nameBounds.bottom)
+            assertEquals("Supporting row starts at the name", nameBounds.left, markerBounds.left, 1f)
+            assertEquals("Source marker shares the tool summary row", counts[index].boundsInRoot.center.y,
+                markerBounds.center.y, 1f)
+            markers[index].assertWidthIsEqualTo(14.dp).assertHeightIsEqualTo(14.dp)
+        }
+        val connectionIcons = compose.onAllNodesWithContentDescription(compose.activity.getString(R.string.mcp_status_on_demand))
+        connectionIcons.assertCountEquals(3)
+        repeat(3) { connectionIcons[it].assertWidthIsEqualTo(20.dp).assertHeightIsEqualTo(20.dp) }
+        compose.onNode(hasContentDescription(mandatory.name) and isToggleable()).assertIsOn().assertIsNotEnabled()
+        compose.onNode(hasContentDescription(optional.name) and isToggleable()).assertIsOff().assertIsEnabled().performClick()
+        compose.onNode(hasContentDescription(personal.name) and isToggleable()).assertIsOff().assertIsEnabled().performClick()
+        assertEquals(listOf(optional.serverId to true, personal.serverId to true), commands)
+        val image = compose.onRoot().captureToImage().asAndroidBitmap()
+        val root = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.let(::File) ?: requireNotNull(compose.activity.getExternalFilesDir(null))
+        check(root.isDirectory || root.mkdirs())
+        val screenshot = File(root, "mcp-picker-enterprise-source.png")
+        screenshot.outputStream().use { check(image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+    }
+
+    @Test fun idlePresentationKeepsActionableAuthorizationAndNetworkStates() {
+        val state = mutableStateOf(choice().copy(status = McpStatus.NeedsAuthorization, sessionCallable = false))
+        compose.setContent { MaterialTheme { McpPicker(listOf(state.value), onToggle = { _, _ -> error("fixed binding") }) } }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_needs_authorization)).assertIsDisplayed()
+        compose.runOnIdle { state.value = state.value.copy(status = McpStatus.WaitingNetwork) }
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_status_waiting_network)).assertIsDisplayed()
     }
 
     @Test fun longListKeepsTheLastServerAndItsOriginalCommandReachable() {
@@ -114,7 +178,7 @@ class McpPickerAndroidTest {
         val commands = mutableListOf<Pair<ConfigurationReference, Boolean>>()
         compose.setContent { MaterialTheme { McpPicker(choices, onToggle = { id, enabled -> commands += id to enabled }) } }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Server 12"))
-        compose.onNodeWithContentDescription("Server 12").assertIsOn().performClick()
+        compose.onNode(hasContentDescription("Server 12") and isToggleable()).assertIsOn().performClick()
         assertEquals(listOf(choices.last().serverId to false), commands)
     }
 
@@ -132,6 +196,6 @@ class McpPickerAndroidTest {
         disclosure.performClick()
         compose.onNodeWithText(detail).assertExists()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
-        compose.onNodeWithContentDescription(server.name).assertIsOn().assertIsNotEnabled()
+        compose.onNode(hasContentDescription(server.name) and isToggleable()).assertIsOn().assertIsNotEnabled()
     }
 }

@@ -17,6 +17,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolOutputPolicy
 import net.weero.measix.pilot.data.ai.mcp.McpAvailableTool
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
+import net.weero.measix.pilot.data.ai.mcp.managedMcpNamespace
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.datastore.Settings
@@ -97,18 +98,22 @@ class TurnToolSetFactoryTest {
         every { local.getTools(any(), any(), any()) } returns emptyList()
         val manager = mockk<McpRuntimeCoordinator>()
         val approvals = mutableListOf<Pair<String?, Boolean>>()
+        val destinations = mutableListOf<Pair<ConfigurationReference, String>>()
         io.mockk.coEvery { manager.callTool(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
             approvals += arg<String?>(7) to arg<Boolean>(8)
+            destinations += arg<ConfigurationReference>(1) to arg<String>(3)
             listOf(me.rerere.ai.ui.UIMessagePart.Text("success"))
         }
         val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk())
         for (hash in listOf(null, "sha256:" + "a".repeat(64))) {
             for (needsApproval in listOf(false, true)) {
-                val capability = availableTool(packet.identity.reference(packet.configuration.mcpServers.first().id), "read",
-                    buildJsonObject { put("type", "object") }).copy(needsApproval = needsApproval, contractHash = hash)
+                val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
+                val capability = availableTool(reference, "read",
+                    buildJsonObject { put("type", "object") }).copy(needsApproval = needsApproval, contractHash = hash,
+                        namespace = managedMcpNamespace(reference))
                 val definition = factory.buildTools(access, Assistant(), settings = Settings(), configuration = resolved,
                     capabilityModel = null, mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(capability)))
-                    .single { it.name == "mcp__server__read" }
+                    .single { it.name == "mcp__${capability.namespace}__read" }
                 val runtime = ToolCallRuntime(Json)
                 val source = me.rerere.ai.ui.UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(),
                     stepId = kotlin.uuid.Uuid.random(), providerCallId = "call", toolName = definition.name, input = "{}")
@@ -128,6 +133,7 @@ class TurnToolSetFactoryTest {
                 val outcome = runtime.execute(prepared, ToolExecutionHooks({ me.rerere.ai.core.ToolAttachmentResolution() }, { _, _ -> }, {}, {}))
                 assertEquals(me.rerere.ai.ui.ToolResultStatus.COMPLETED, outcome.resultStatus)
                 assertEquals(hash to needsApproval, approvals.last())
+                assertEquals(reference to "read", destinations.last())
                 val child = prepare(source, TurnInteractionCapability.USER_INPUT_ONLY)
                 if (needsApproval) {
                     assertTrue(child.pending.isEmpty())
@@ -166,6 +172,33 @@ class TurnToolSetFactoryTest {
         val arguments = tool.parseArguments("{}", Json)
         assertEquals(ToolInteractionRequirement.Approval, tool.interactionRequirement(arguments))
         assertEquals("{}", arguments.toString())
+    }
+
+    @Test fun `compact managed namespace preserves remote names at the provider length boundary`() = runTest {
+        val local = mockk<LocalTools>()
+        every { local.getTools(any(), any(), any()) } returns emptyList()
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
+        val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
+        val namespace = managedMcpNamespace(reference)
+        val remoteName = "remote_" + "x".repeat(38)
+        val schema = buildJsonObject { put("type", "object") }
+        val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val tools = factory.buildTools(
+            realmAccess = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(packet.identity.scope, "session"),
+            assistant = configuration.assistants.values.first(), settings = Settings(),
+            configuration = configuration, capabilityModel = null,
+            mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(
+                availableTool(reference, remoteName, schema).copy(namespace = namespace),
+                availableTool(reference, remoteName + "x", schema).copy(namespace = namespace),
+            )),
+        )
+        val bound = tools.single { it.name.startsWith("mcp__") }
+        assertEquals("mcp__${namespace}__${remoteName}", bound.name)
+        assertEquals(64, bound.name.length)
+        assertEquals(schema, bound.parameters())
     }
 
     @Test
